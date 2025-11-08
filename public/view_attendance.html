@@ -1,0 +1,98 @@
+<!-- view_attendance.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>View Attendance</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+      background-color: #f4f4f4;
+    }
+
+    h3, h4 {
+      color: #2c3e50;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 10px;
+      text-align: center;
+    }
+
+    th {
+      background-color: #3498db;
+      color: white;
+    }
+
+    td {
+      background-color: #ecf0f1;
+    }
+  </style>
+</head>
+<body>
+  <h3>Grouped Attendance for Today</h3>
+  <div id="attendanceContent"></div>
+
+  <script>
+    let attendanceData = [];
+  
+    function downloadCSV(groupIndex) {
+      const group = attendanceData[groupIndex];
+      let csvContent = "S.No,Reg Number,Name,Time\n";
+      group.forEach((student, index) => {
+        csvContent += `${index + 1},${student.reg_number},${student.name},${student.time}\n`;
+      });
+  
+      csvContent += `\nTotal Students,${group.length}\n`;
+  
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `Group_${groupIndex + 1}_Attendance.csv`);
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  
+    async function loadAttendance() {
+      const response = await fetch('/api/faculty-view-attendance', { method: 'POST' });
+      const data = await response.json();
+  
+      if (data.success) {
+        attendanceData = data.groupedAttendance;
+        let html = '';
+  
+        data.groupedAttendance.forEach((group, index) => {
+          if (group.length === 0) return;
+  
+          html += `<h4>Group ${index + 1} - Date: ${group[0].date}</h4>`;
+          html += `<button onclick='downloadCSV(${index})'>Download CSV</button>`;
+          html += "<table><tr><th>S.No</th><th>Reg Number</th><th>Name</th><th>Time</th></tr>";
+  
+          group.forEach((student, i) => {
+            html += `<tr><td>${i + 1}</td><td>${student.reg_number}</td><td>${student.name}</td><td>${student.time}</td></tr>`;
+          });
+  
+          html += "</table><br>";
+        });
+  
+        document.getElementById("attendanceContent").innerHTML = html;
+      } else {
+        document.getElementById("attendanceContent").innerHTML = "<p>Error fetching attendance data.</p>";
+      }
+    }
+  
+    loadAttendance();
+  </script>  
+</body>
+</html>

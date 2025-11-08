@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <script defer src="script.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            position: relative;
+            background-color: #f5f7fa;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url('background1.png'); 
+            background-size: cover;
+            background-position: center;
+            opacity: 0.50;
+            z-index: -1;
+        }
+
+        header {
+            background: linear-gradient(to right, #0d47a1, #1976d2);
+            padding: 15px 30px;
+            color: white;
+            display: flex;
+            align-items: center;
+        }
+
+        header img {
+            height: 40px;
+            margin-right: 15px;
+        }
+
+        header h1 {
+            font-size: 22px;
+            font-weight: 600;
+        }
+
+        footer {
+            background: #0d47a1;
+            color: white;
+            text-align: center;
+            padding: 10px 20px;
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            font-size: 14px;
+        }
+
+        form {
+            background-color: #ffffffee;
+            max-width: 400px;
+            margin: 80px auto 120px auto;
+            padding: 30px 40px;
+            border-radius: 12px;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            text-align: center;
+            margin-bottom: 25px;
+            color: #2c3e50;
+        }
+
+        label {
+            display: block;
+            margin-top: 15px;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #34495e;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+
+        button {
+            margin-top: 20px;
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <img src="logo1.png" alt="Logo">
+        <h1>VIT (Chennai Campus)</h1>
+    </header>
+
+    <form id="loginForm">
+        <h2>Login</h2>
+
+        <label>Name:</label>
+        <input type="text" id="username" required>
+
+        <label>Registration Number / Faculty ID:</label>
+        <input type="text" id="identifier" required>
+
+        <label>Role:</label>
+        <select id="role">
+            <option value="student">Student</option>
+            <option value="faculty">Faculty</option>
+        </select>
+
+        <button type="submit">Login</button>
+        <button type="button" id="signupButton">Sign Up</button>
+    </form>
+
+    <footer>
+        Copyright © 2025 Software Development Cell,
+        VIT, Chennai-600 127. All rights reserved.
+    </footer>
+
+</body>
+</html>

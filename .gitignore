@@ -1,0 +1,20 @@
+# Node modules
+node_modules/
+
+# Logs
+logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# SQLite GUI project file (optional)
+*.sqbpro
+
+# DON’T IGNORE THIS (you WANT to keep it)
+# database.sqlite ❌❌❌ (Do NOT add this line)

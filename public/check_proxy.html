@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Check Proxy - Location View</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Add OverlappingMarkerSpiderfier Plugin -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/OverlappingMarkerSpiderfier-Leaflet/0.2.6/oms.min.js"></script>
+    <style>
+        #map {
+            height: 90vh;
+            width: 100%;
+            margin: 20px auto;
+            border-radius: 10px;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        h2 {
+            margin-top: 20px;
+        }
+        
+        /* Add styling for marker counter */
+        .marker-count {
+            background-color: #3388ff;
+            border-radius: 50%;
+            color: white;
+            font-weight: bold;
+            width: 25px;
+            height: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid white;
+        }
+        
+        .multi-student-popup .student-entry {
+            border-bottom: 1px solid #eee;
+            padding: 5px 0;
+        }
+        
+        .multi-student-popup .student-entry:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+<body>
+    <h2>Student Locations - Proxy Check</h2>
+    <div id="map"></div>
+
+    <script>
+      async function loadStudentLocations() {
+          const groupNumber = prompt("Enter group number (e.g., 1, 2, 3):");
+          if (!groupNumber || isNaN(groupNumber)) {
+              alert("Invalid group number");
+              return;
+          }
+  
+          const res = await fetch(`/api/check-proxy?group=${groupNumber}`);
+          const data = await res.json();
+          console.log("Fetched locations:", data);
+  
+          if (!data.success || !data.locations.length) {
+              alert("No student location data found for this group.");
+              return;
+          }
+  
+          const map = L.map('map').setView([12.84, 80.15], 17);
+  
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              maxZoom: 190,
+              detectRetina: true 
+          }).addTo(map);
+          
+          // Initialize the OverlappingMarkerSpiderfier
+          const oms = new OverlappingMarkerSpiderfier(map);
+          
+          // Create popup object to be reused
+          const popup = new L.Popup();
+          
+          // Add click listener to spiderfied markers
+          oms.addListener('click', function(marker) {
+              popup.setContent(marker.desc);
+              popup.setLatLng(marker.getLatLng());
+              map.openPopup(popup);
+          });
+          
+          // Close popup when spiderfying
+          oms.addListener('spiderfy', function(markers) {
+              map.closePopup();
+          });
+          
+          // Alternative approach: Group markers by exact location
+          const locationGroups = {};
+          
+          // Group students by exact coordinates
+          data.locations.forEach(student => {
+              if (student.latitude && student.longitude) {
+                  const key = `${student.latitude},${student.longitude}`;
+                  if (!locationGroups[key]) {
+                      locationGroups[key] = [];
+                  }
+                  locationGroups[key].push(student);
+              }
+          });
+          
+          // Add markers based on location groups
+          Object.entries(locationGroups).forEach(([coords, students]) => {
+              const [lat, lng] = coords.split(',');
+              const count = students.length;
+              
+              // Create marker with default Leaflet icon
+              const marker = L.marker([parseFloat(lat), parseFloat(lng)]);
+              
+              // Create custom icon with count if more than one student
+              if (count > 1) {
+                  marker.setIcon(L.divIcon({
+                      html: `<div class="marker-count">${count}</div>`,
+                      className: 'custom-marker',
+                      iconSize: [30, 30]
+                  }));
+              }
+              
+              // Create popup with all students at this location
+              let popupContent = '<div class="multi-student-popup">';
+              students.forEach(student => {
+                  popupContent += `
+                      <div class="student-entry">
+                          <b>${student.name}</b><br>
+                          ${student.reg_number}<br>
+                          Time: ${student.time}
+                      </div>
+                  `;
+              });
+              popupContent += '</div>';
+              
+              // Store popup content in marker for spiderfier
+              marker.desc = popupContent;
+              
+              // Add popup to marker
+              marker.bindPopup(popupContent);
+              
+              // Add marker to map
+              marker.addTo(map);
+              
+              // Register marker with spiderfier
+              oms.addMarker(marker);
+          });
+      }
+  
+      loadStudentLocations();
+    </script>
+</body>
+</html>

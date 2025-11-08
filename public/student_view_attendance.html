@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Your Attendance</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f4f4f4;
+      padding: 30px;
+    }
+
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-bottom: 30px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 12px;
+      text-align: center;
+    }
+
+    th {
+      background-color: #3498db;
+      color: white;
+    }
+
+    td {
+      background-color: #ecf0f1;
+    }
+
+    #noData {
+      text-align: center;
+      font-size: 18px;
+      color: #e74c3c;
+    }
+  </style>
+</head>
+<body>
+  <h2>Your Attendance Records</h2>
+  <div id="attendanceTable"></div>
+
+  <script>
+    async function loadStudentAttendance() {
+      const response = await fetch('/api/view-attendance', { method: 'POST' });
+      const data = await response.json();
+
+      if (data.success && data.attendance.length > 0) {
+        let html = "<table><tr><th>S.No</th><th>Date</th><th>Time</th><th>Status</th></tr>";
+
+        data.attendance.forEach((record, index) => {
+          html += `<tr>
+                      <td>${index + 1}</td>
+                      <td>${record.date}</td>
+                      <td>${record.time}</td>
+                      <td>${record.status}</td>
+                   </tr>`;
+        });
+
+        html += "</table>";
+        document.getElementById("attendanceTable").innerHTML = html;
+      } else {
+        document.getElementById("attendanceTable").innerHTML = "<p id='noData'>No attendance records found.</p>";
+      }
+    }
+
+    loadStudentAttendance();
+  </script>
+</body>
+</html>
