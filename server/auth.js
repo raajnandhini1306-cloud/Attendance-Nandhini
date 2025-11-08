@@ -97,7 +97,7 @@ if (!insideGeoFence) {
       vertex.lat,
       vertex.lng
     );
-    if (dist <= 10) { // 10 m tolerance
+    if (dist <= 30) { // 10 m tolerance
       nearBoundary = true;
       break;
     }
