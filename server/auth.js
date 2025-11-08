@@ -35,12 +35,22 @@ router.post('/mark-attendance', (req, res) => {
     if (timeElapsed <= attendanceTimeLimit) {
 
         const point = { lat: latitude, lng: longitude };
-        const allAreas = require('./allowedArea.json');
-        const allowedArea = allAreas[classroom];
+const allAreas = require('./allowedArea.json');
 
-        if (!allowedArea) {
-            return res.status(400).json({ success: false, message: 'Invalid classroom ID or area not defined' });
-        }
+// Case-insensitive classroom name lookup
+const classKey = Object.keys(allAreas).find(
+  key => key.toLowerCase() === classroom.toLowerCase()
+);
+
+const allowedArea = allAreas[classKey];
+
+if (!allowedArea) {
+  return res.status(400).json({
+    success: false,
+    message: 'Invalid classroom ID or area not defined'
+  });
+}
+
 
         function isInsidePolygon(point, polygon) {
             let x = point.lat, y = point.lng;
