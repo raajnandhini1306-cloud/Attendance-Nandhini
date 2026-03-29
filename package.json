@@ -7,8 +7,10 @@
         "start": "node server/server.js"
     },
     "dependencies": {
-        "cors": "^2.8.5",
-        "express": "^4.18.2",
-        "sqlite3": "^5.1.6"
+        "body-parser": "^2.2.2",
+        "cors": "^2.8.6",
+        "express": "^4.22.1",
+        "sqlite3": "^5.1.7",
+        "uuid": "^9.0.1"
     }
 }

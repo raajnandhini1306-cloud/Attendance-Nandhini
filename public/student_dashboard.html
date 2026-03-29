@@ -108,6 +108,9 @@
 
     <div class="dashboard-container">
         <h2>Student Dashboard</h2>
+        <input type="text" id="classroomInput" placeholder="Classroom ID (e.g. AB3)" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
+        <input type="text" id="sessionTokenInput" placeholder="Session Token (from faculty)" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
+        <input type="text" id="boardCodeInput" placeholder="4-digit Board Code" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
         <button onclick="markAttendance()">Mark Attendance</button>
         <button onclick="viewAttendance()">View Attendance</button>
         <div id="attendanceList"></div>

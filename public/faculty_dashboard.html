@@ -145,18 +145,28 @@
         <h1>VIT (Chennai Campus)</h1>
     </header>
 
-    <div class="dashboard-container">
-        <h2>Faculty Dashboard</h2>
+<div class="dashboard-container">
+    <h2>Faculty Dashboard</h2>
 
-        <label for="timeLimit">Enter Time Limit (in minutes):</label>
-        <input type="number" id="timeLimit" min="1" placeholder="Max 2">
+    <label for="classroomId">Classroom ID:</label>
+    <input type="text" id="classroomId" placeholder="e.g. AB3">
 
-        <button onclick="startAttendance()">Start Attendance</button>
-        <button onclick="window.open('view_attendance.html', '_blank')">View Attendance</button>
-        <button onclick="window.open('check_proxy.html', '_blank')">Check Proxy</button>
+    <button onclick="setClassroomLocation()">Set My Location as Classroom</button>
+    <div id="locationStatus" style="margin:8px 0; font-size:14px; color:#27ae60;"></div>
 
-        <div id="attendanceTable"></div>
-    </div>
+    <label for="timeLimit">Time Limit (minutes):</label>
+    <input type="number" id="timeLimit" min="1" placeholder="e.g. 2">
+
+    <button onclick="startAttendance()">Start Attendance</button>
+
+    <div id="boardCodeDisplay"></div>
+    <div id="countdownTimer" style="font-size:1.2em; color:#e74c3c; margin-top:10px;"></div>
+
+    <button onclick="facultyViewAttendance()">View Attendance</button>
+    <button onclick="window.open('check_proxy.html', '_blank')">Check Proxy</button>
+
+    <div id="attendanceTable"></div>
+</div>
 
     <footer>
         Copyright © 2025 Software Development Cell,
