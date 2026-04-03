@@ -1,3 +1,20 @@
+// ─── DEVICE FINGERPRINT ───────────────────────────────────────────────
+async function getFingerprint() {
+    const raw = [
+        navigator.userAgent,
+        screen.width + 'x' + screen.height,
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+        navigator.language,
+        screen.colorDepth
+    ].join('|');
+
+    const encoder = new TextEncoder();
+    const data = encoder.encode(raw);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // ─── SET CLASSROOM LOCATION (faculty) ────────────────────────────────
 async function setClassroomLocation() {
     const classroom = document.getElementById('classroomId').value.trim();
@@ -32,6 +49,7 @@ async function setClassroomLocation() {
         document.getElementById('locationStatus').textContent = 'Location access denied.';
     });
 }
+
 // ─── LOGIN ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     const loginForm = document.getElementById('loginForm');
@@ -44,16 +62,21 @@ document.addEventListener('DOMContentLoaded', () => {
         const role = document.getElementById('role').value;
 
         try {
+            const fingerprint = await getFingerprint();
+
             const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, identifier, role })
+                body: JSON.stringify({ username, identifier, role, fingerprint })
             });
             const data = await res.json();
             if (data.success) {
                 localStorage.setItem('reg_number', identifier);
                 localStorage.setItem('role', role);
                 localStorage.setItem('name', username);
+                if (data.deviceRegistered) {
+                    alert('Device registered successfully. This device is now linked to your account.');
+                }
                 window.location.href = role === 'student'
                     ? 'student_dashboard.html'
                     : 'faculty_dashboard.html';
@@ -112,7 +135,8 @@ async function startAttendance() {
 
         document.getElementById('boardCodeDisplay').innerHTML =
             `<h3>Board Code: <span style="color:#e74c3c; font-size:2em;">${data.boardCode}</span></h3>
-             <p>Write this on the board. Expires in ${timeLimit} minute(s).</p>`;
+             <p>Write this on the board. Expires in ${timeLimit} minute(s).</p>
+             <p style="font-size:11px; color:#888; word-break:break-all;">Token: ${data.token}</p>`;
 
         startCountdown(data.expiryTime);
     } else {
@@ -137,6 +161,32 @@ function startCountdown(expiryTime) {
     }, 1000);
 }
 
+// ─── AUTO FETCH SESSION TOKEN (student) ──────────────────────────────
+async function fetchSessionToken() {
+    const classroom = document.getElementById('classroomInput').value.trim();
+    const statusEl = document.getElementById('tokenStatus');
+    if (!classroom) return;
+
+    statusEl.textContent = 'Checking for active session...';
+    statusEl.style.color = '#888';
+
+    const res = await fetch(`/api/active-session?classroom=${classroom}`);
+
+    if (res.status === 204) {
+        statusEl.textContent = 'No active session for this classroom.';
+        statusEl.style.color = '#e74c3c';
+        document.getElementById('sessionTokenInput').value = '';
+        return;
+    }
+
+    const data = await res.json();
+    if (data.token) {
+        document.getElementById('sessionTokenInput').value = data.token;
+        statusEl.textContent = 'Session found — enter board code and submit.';
+        statusEl.style.color = '#27ae60';
+    }
+}
+
 // ─── MARK ATTENDANCE (student) ───────────────────────────────────────
 async function markAttendance() {
     const reg_number = localStorage.getItem('reg_number');
@@ -156,12 +206,14 @@ async function markAttendance() {
         const latitude = position.coords.latitude;
         const longitude = position.coords.longitude;
 
+        const fingerprint = await getFingerprint();
+
         const res = await fetch('/api/mark-attendance', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 reg_number, latitude, longitude,
-                classroom, boardCode, sessionToken
+                classroom, boardCode, sessionToken, fingerprint
             })
         });
 

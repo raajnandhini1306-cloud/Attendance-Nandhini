@@ -30,7 +30,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
             set_by TEXT NOT NULL,
             set_at INTEGER NOT NULL
         )`);
-
+        db.run(`CREATE TABLE IF NOT EXISTS device_fingerprints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reg_number TEXT UNIQUE NOT NULL,
+                fingerprint TEXT NOT NULL,
+                registered_at INTEGER NOT NULL
+        )`);
         db.run(`CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT UNIQUE NOT NULL,

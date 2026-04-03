@@ -30,7 +30,7 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
 
 // ─── LOGIN ───────────────────────────────────────────────────────────
 router.post('/api/login', (req, res) => {
-    const { username, identifier, role } = req.body;
+    const { username, identifier, role, fingerprint } = req.body;
     const table = role === 'student' ? 'students' : 'faculty';
     const column = role === 'student' ? 'reg_number' : 'faculty_id';
 
@@ -40,7 +40,38 @@ router.post('/api/login', (req, res) => {
         (err, row) => {
             if (err) return res.status(500).json({ success: false, message: 'Database error' });
             if (!row) return res.status(401).json({ success: false, message: 'Invalid credentials' });
-            res.json({ success: true, role, name: row.name, identifier });
+
+            if (role !== 'student') {
+                return res.json({ success: true, role, name: row.name, identifier });
+            }
+
+            db.get(
+                `SELECT * FROM device_fingerprints WHERE reg_number = ?`,
+                [identifier],
+                (err, fpRow) => {
+                    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+
+                    if (!fpRow) {
+                        db.run(
+                            `INSERT INTO device_fingerprints (reg_number, fingerprint, registered_at)
+                             VALUES (?, ?, ?)`,
+                            [identifier, fingerprint, Date.now()],
+                            (err) => {
+                                if (err) return res.status(500).json({ success: false, message: 'Failed to register device' });
+                                res.json({ success: true, role, name: row.name, identifier, deviceRegistered: true });
+                            }
+                        );
+                    } else {
+                        if (fpRow.fingerprint !== fingerprint) {
+                            return res.status(401).json({
+                                success: false,
+                                message: 'This account is registered to a different device. Please use your registered device.'
+                            });
+                        }
+                        res.json({ success: true, role, name: row.name, identifier, deviceRegistered: false });
+                    }
+                }
+            );
         }
     );
 });
@@ -69,16 +100,13 @@ router.post('/api/signup', (req, res) => {
     });
 });
 
-// ─── SET CLASSROOM LOCATION (faculty sets GPS on arrival) ────────────
+// ─── SET CLASSROOM LOCATION ───────────────────────────────────────────
 router.post('/api/set-classroom-location', (req, res) => {
     const { classroom_id, latitude, longitude, faculty_id, radius } = req.body;
 
     if (!classroom_id || !latitude || !longitude || !faculty_id)
         return res.status(400).json({ success: false, message: 'Missing fields' });
 
-    const now = Date.now();
-
-    // Insert or update if classroom already exists
     db.run(
         `INSERT INTO classrooms (classroom_id, center_lat, center_lng, radius, set_by, set_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -88,7 +116,7 @@ router.post('/api/set-classroom-location', (req, res) => {
          radius = excluded.radius,
          set_by = excluded.set_by,
          set_at = excluded.set_at`,
-        [classroom_id, latitude, longitude, radius || 30, faculty_id, now],
+        [classroom_id, latitude, longitude, radius || 30, faculty_id, Date.now()],
         function (err) {
             if (err) return res.status(500).json({ success: false, message: 'Failed to save location' });
             res.json({
@@ -102,14 +130,13 @@ router.post('/api/set-classroom-location', (req, res) => {
     );
 });
 
-// ─── START ATTENDANCE ────────────────────────────────────────────────
+// ─── START ATTENDANCE ─────────────────────────────────────────────────
 router.post('/api/start-attendance', (req, res) => {
     const { faculty_id, classroom, timeLimit } = req.body;
 
     if (!faculty_id || !classroom || !timeLimit)
         return res.status(400).json({ success: false, message: 'Missing fields' });
 
-    // Check classroom location is set
     db.get(
         `SELECT * FROM classrooms WHERE classroom_id = ?`,
         [classroom],
@@ -121,7 +148,6 @@ router.post('/api/start-attendance', (req, res) => {
                     message: 'Classroom location not set. Please set your location first.'
                 });
 
-            // Deactivate existing sessions for this classroom
             db.run(
                 `UPDATE sessions SET is_active = 0 WHERE classroom = ? AND is_active = 1`,
                 [classroom],
@@ -155,7 +181,7 @@ router.post('/api/start-attendance', (req, res) => {
     );
 });
 
-// ─── ACTIVE SESSION (ESP32 polls this) ───────────────────────────────
+// ─── ACTIVE SESSION (ESP32 polls this) ────────────────────────────────
 router.get('/api/active-session', (req, res) => {
     const classroom = req.query.classroom;
     if (!classroom)
@@ -176,76 +202,87 @@ router.get('/api/active-session', (req, res) => {
     );
 });
 
-// ─── MARK ATTENDANCE ─────────────────────────────────────────────────
+// ─── MARK ATTENDANCE ──────────────────────────────────────────────────
 router.post('/api/mark-attendance', (req, res) => {
-    const { reg_number, latitude, longitude, classroom, boardCode, sessionToken } = req.body;
+    const { reg_number, latitude, longitude, classroom, boardCode, sessionToken, fingerprint } = req.body;
 
-    if (!reg_number || !latitude || !longitude || !classroom || !boardCode || !sessionToken)
+    if (!reg_number || !latitude || !longitude || !classroom || !boardCode || !sessionToken || !fingerprint)
         return res.status(400).json({ success: false, message: 'Missing fields' });
 
     const now = Date.now();
     const { date, time } = getNow();
 
-    // Step 1 — Validate session
+    // Step 0 — Validate device fingerprint
     db.get(
-        `SELECT * FROM sessions
-         WHERE token = ? AND classroom = ? AND is_active = 1 AND expiry_time > ?`,
-        [sessionToken, classroom, now],
-        (err, session) => {
+        `SELECT * FROM device_fingerprints WHERE reg_number = ?`,
+        [reg_number],
+        (err, fpRow) => {
             if (err) return res.status(500).json({ success: false, message: 'Database error' });
-            if (!session)
-                return res.status(400).json({ success: false, message: 'No active session — time may have expired' });
+            if (!fpRow) return res.status(400).json({ success: false, message: 'Device not registered. Please log in first.' });
+            if (fpRow.fingerprint !== fingerprint)
+                return res.status(400).json({ success: false, message: 'Wrong device. Please use your registered device.' });
 
-            // Step 2 — Validate board code
-            if (session.board_code !== boardCode)
-                return res.status(400).json({ success: false, message: 'Wrong board code' });
-
-            // Step 3 — Get classroom location from DB
+            // Step 1 — Validate session
             db.get(
-                `SELECT * FROM classrooms WHERE classroom_id = ?`,
-                [classroom],
-                (err, classroomRow) => {
+                `SELECT * FROM sessions
+                 WHERE token = ? AND classroom = ? AND is_active = 1 AND expiry_time > ?`,
+                [sessionToken, classroom, now],
+                (err, session) => {
                     if (err) return res.status(500).json({ success: false, message: 'Database error' });
-                    if (!classroomRow)
-                        return res.status(400).json({ success: false, message: 'Classroom location not found' });
+                    if (!session)
+                        return res.status(400).json({ success: false, message: 'No active session — time may have expired' });
 
-                    // Step 4 — GPS distance check
-                    const distance = getDistanceMeters(
-                        latitude, longitude,
-                        classroomRow.center_lat, classroomRow.center_lng
-                    );
+                    // Step 2 — Validate board code
+                    if (session.board_code !== boardCode)
+                        return res.status(400).json({ success: false, message: 'Wrong board code' });
 
-                    if (distance > classroomRow.radius)
-                        return res.status(400).json({
-                            success: false,
-                            message: `You are ${Math.round(distance)}m away from the classroom. Must be within ${classroomRow.radius}m.`
-                        });
+                    // Step 3 — Get classroom location
+                    db.get(
+                        `SELECT * FROM classrooms WHERE classroom_id = ?`,
+                        [classroom],
+                        (err, classroomRow) => {
+                            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+                            if (!classroomRow)
+                                return res.status(400).json({ success: false, message: 'Classroom location not found' });
 
-                    // Step 5 — Duplicate check
-                    db.run(
-                        `INSERT INTO attendance (reg_number, session_id, date, time, status)
-                         VALUES (?, ?, ?, ?, 'Present')`,
-                        [reg_number, session.id, date, time],
-                        function (err) {
-                            if (err) {
-                                if (err.message.includes('UNIQUE constraint failed'))
-                                    return res.status(400).json({ success: false, message: 'Attendance already marked for this session' });
-                                return res.status(500).json({ success: false, message: 'Database error' });
-                            }
-
-                            // Save location
-                            db.run(
-                                `INSERT INTO location (reg_number, latitude, longitude, date, time)
-                                 VALUES (?, ?, ?, ?, ?)`,
-                                [reg_number, latitude, longitude, date, time]
+                            // Step 4 — GPS distance check
+                            const distance = getDistanceMeters(
+                                latitude, longitude,
+                                classroomRow.center_lat, classroomRow.center_lng
                             );
 
-                            res.json({
-                                success: true,
-                                message: `Attendance marked. You were ${Math.round(distance)}m from classroom.`,
-                                date,
-                                time
-                            });
+                            if (distance > classroomRow.radius)
+                                return res.status(400).json({
+                                    success: false,
+                                    message: `You are ${Math.round(distance)}m away. Must be within ${classroomRow.radius}m.`
+                                });
+
+                            // Step 5 — Duplicate check
+                            db.run(
+                                `INSERT INTO attendance (reg_number, session_id, date, time, status)
+                                 VALUES (?, ?, ?, ?, 'Present')`,
+                                [reg_number, session.id, date, time],
+                                function (err) {
+                                    if (err) {
+                                        if (err.message.includes('UNIQUE constraint failed'))
+                                            return res.status(400).json({ success: false, message: 'Attendance already marked for this session' });
+                                        return res.status(500).json({ success: false, message: 'Database error' });
+                                    }
+
+                                    db.run(
+                                        `INSERT INTO location (reg_number, latitude, longitude, date, time)
+                                         VALUES (?, ?, ?, ?, ?)`,
+                                        [reg_number, latitude, longitude, date, time]
+                                    );
+
+                                    res.json({
+                                        success: true,
+                                        message: `Attendance marked. You were ${Math.round(distance)}m from classroom.`,
+                                        date,
+                                        time
+                                    });
+                                }
+                            );
                         }
                     );
                 }
@@ -254,7 +291,7 @@ router.post('/api/mark-attendance', (req, res) => {
     );
 });
 
-// ─── VIEW ATTENDANCE (student) ────────────────────────────────────────
+// ─── VIEW ATTENDANCE (student) ─────────────────────────────────────────
 router.post('/api/view-attendance', (req, res) => {
     const { reg_number } = req.body;
     db.all(
@@ -271,7 +308,7 @@ router.post('/api/view-attendance', (req, res) => {
     );
 });
 
-// ─── VIEW ATTENDANCE (faculty) ────────────────────────────────────────
+// ─── VIEW ATTENDANCE (faculty) ─────────────────────────────────────────
 router.post('/api/faculty-view-attendance', (req, res) => {
     const { classroom } = req.body;
     const date = new Date().toISOString().split('T')[0];
@@ -291,7 +328,7 @@ router.post('/api/faculty-view-attendance', (req, res) => {
     );
 });
 
-// ─── CHECK PROXY ──────────────────────────────────────────────────────
+// ─── CHECK PROXY ───────────────────────────────────────────────────────
 router.get('/api/check-proxy', (req, res) => {
     const date = new Date().toISOString().split('T')[0];
     const classroom = req.query.classroom;

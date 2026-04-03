@@ -25,7 +25,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: url('background1.png'); 
+            background-image: url('background1.png');
             background-size: cover;
             background-position: center;
             opacity: 0.50;
@@ -77,6 +77,16 @@
             margin-bottom: 25px;
         }
 
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 8px 0;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+
         button {
             background-color: #3498db;
             color: white;
@@ -91,6 +101,13 @@
 
         button:hover {
             background-color: #2980b9;
+        }
+
+        #tokenStatus {
+            font-size: 13px;
+            color: #27ae60;
+            margin: 4px 0 8px 0;
+            min-height: 18px;
         }
 
         #attendanceList {
@@ -108,11 +125,30 @@
 
     <div class="dashboard-container">
         <h2>Student Dashboard</h2>
-        <input type="text" id="classroomInput" placeholder="Classroom ID (e.g. AB3)" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
-        <input type="text" id="sessionTokenInput" placeholder="Session Token (from faculty)" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
-        <input type="text" id="boardCodeInput" placeholder="4-digit Board Code" style="width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:8px; font-size:16px;">
+
+        <input
+            type="text"
+            id="classroomInput"
+            placeholder="Classroom ID (e.g. AB3)"
+            onblur="fetchSessionToken()">
+
+        <div id="tokenStatus"></div>
+
+        <input
+            type="text"
+            id="sessionTokenInput"
+            placeholder="Session token (auto-filled)"
+            readonly
+            style="background:#f0f0f0; color:#888; font-size:12px;">
+
+        <input
+            type="text"
+            id="boardCodeInput"
+            placeholder="4-digit Board Code">
+
         <button onclick="markAttendance()">Mark Attendance</button>
         <button onclick="viewAttendance()">View Attendance</button>
+
         <div id="attendanceList"></div>
     </div>
 
