@@ -192,15 +192,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Register fingerprint for students on first login
-    if (role === 'student' && data.deviceRegistered) {
+   // Register fingerprint for students
+if (role === 'student') {
+    // Check if fingerprint already registered
+    const checkRes = await fetch('/api/webauthn/auth-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reg_number: identifier })
+    });
+
+    if (!checkRes.ok) {
+        // No fingerprint registered yet — register now
         alert('Please scan your fingerprint to register it for attendance verification.');
         const registered = await registerFingerprint(identifier, username);
         if (registered) {
-            alert('Fingerprint registered successfully. You will be asked to verify it when marking attendance.');
+            alert('Fingerprint registered successfully.');
         } else {
-            alert('Fingerprint registration failed or skipped. You can try again later.');
+            alert('Fingerprint registration failed or skipped.');
         }
     }
+    // If ok — fingerprint already registered, skip
+}
 
     window.location.href = role === 'student'
         ? 'student_dashboard.html'
