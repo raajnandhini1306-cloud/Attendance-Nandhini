@@ -433,7 +433,14 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             if (!verification.verified)
                 return res.status(400).json({ success: false, message: 'Fingerprint verification failed' });
 
-            const { credential } = verification.registrationInfo;
+            const info = verification.registrationInfo;
+
+// Log what fields are available
+console.log('registrationInfo keys:', Object.keys(info));
+
+const credentialID = info.credentialID || info.credential?.id;
+const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
+const counter = info.counter ?? info.credential?.counter ?? 0;
 
 db.run(
     `UPDATE webauthn_credentials SET
@@ -442,9 +449,9 @@ db.run(
      counter = ?
      WHERE reg_number = ?`,
     [
-        Buffer.from(credential.id).toString('base64'),
-        Buffer.from(credential.publicKey).toString('base64'),
-        credential.counter,
+        Buffer.from(credentialID).toString('base64'),
+        Buffer.from(credentialPublicKey).toString('base64'),
+        counter,
         reg_number
     ],
                 (err) => {
