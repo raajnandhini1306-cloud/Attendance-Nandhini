@@ -357,7 +357,7 @@ router.get('/api/check-proxy', (req, res) => {
 
 // ─── TEMP RESET ROUTE (remove after use) ─────────────────────────────
 router.get('/api/reset-db', (req, res) => {
-    const tables = ['attendance', 'location', 'sessions', 'device_fingerprints', 'classrooms', 'students', 'faculty'];
+    const tables = ['attendance', 'location', 'sessions', 'device_fingerprints', 'classrooms', 'students', 'faculty', 'webauthn_credentials'];
     let done = 0;
     tables.forEach(table => {
         db.run(`DELETE FROM ${table}`, () => {
@@ -391,7 +391,6 @@ router.post('/api/webauthn/register-options', async (req, res) => {
             timeout: 60000,
         });
 
-        // Store challenge temporarily in DB
         db.run(
             `INSERT INTO webauthn_credentials (reg_number, credential_id, public_key, counter, registered_at)
              VALUES (?, ?, ?, ?, ?)
@@ -434,26 +433,24 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
                 return res.status(400).json({ success: false, message: 'Fingerprint verification failed' });
 
             const info = verification.registrationInfo;
+            console.log('registrationInfo keys:', Object.keys(info));
 
-// Log what fields are available
-console.log('registrationInfo keys:', Object.keys(info));
+            const credentialID = info.credentialID || info.credential?.id;
+            const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
+            const counter = info.counter ?? info.credential?.counter ?? 0;
 
-const credentialID = info.credentialID || info.credential?.id;
-const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
-const counter = info.counter ?? info.credential?.counter ?? 0;
-
-db.run(
-    `UPDATE webauthn_credentials SET
-     credential_id = ?,
-     public_key = ?,
-     counter = ?
-     WHERE reg_number = ?`,
-    [
-        Buffer.from(credentialID).toString('base64'),
-        Buffer.from(credentialPublicKey).toString('base64'),
-        counter,
-        reg_number
-    ],
+            db.run(
+                `UPDATE webauthn_credentials SET
+                 credential_id = ?,
+                 public_key = ?,
+                 counter = ?
+                 WHERE reg_number = ?`,
+                [
+                    Buffer.from(credentialID).toString('base64'),
+                    Buffer.from(credentialPublicKey).toString('base64'),
+                    counter,
+                    reg_number
+                ],
                 (err) => {
                     if (err) return res.status(500).json({ success: false, message: 'Failed to save credential' });
                     res.json({ success: true, message: 'Fingerprint registered successfully' });
@@ -477,21 +474,35 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fingerprint registered' });
 
         try {
+            const credIdBuffer = new Uint8Array(Buffer.from(row.credential_id, 'base64'));
+
             const options = await generateAuthenticationOptions({
                 rpID: 'no-proxy-attendance.onrender.com',
                 allowCredentials: [{
-    id: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
-    type: 'public-key',
-    transports: ['internal'],
-}],
+                    id: credIdBuffer,
+                    type: 'public-key',
+                    transports: ['internal'],
+                }],
                 userVerification: 'required',
                 timeout: 60000,
             });
 
-            // Save challenge temporarily
+            // Parse existing stored data to get the real public key
+            let existingPublicKey = row.public_key;
+            try {
+                const parsed = JSON.parse(row.public_key);
+                existingPublicKey = parsed.publicKey || row.public_key;
+            } catch(e) {
+                existingPublicKey = row.public_key;
+            }
+
             db.run(
                 `UPDATE webauthn_credentials SET public_key = ? WHERE reg_number = ?`,
-                [JSON.stringify({ challenge: options.challenge, publicKey: row.public_key, counter: row.counter }), reg_number]
+                [JSON.stringify({
+                    challenge: options.challenge,
+                    publicKey: existingPublicKey,
+                    counter: row.counter
+                }), reg_number]
             );
 
             res.json({ success: true, options });
@@ -521,8 +532,8 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
                 expectedOrigin: 'https://no-proxy-attendance.onrender.com',
                 expectedRPID: 'no-proxy-attendance.onrender.com',
                 authenticator: {
-                    credentialID: Buffer.from(row.credential_id, 'base64'),
-                    credentialPublicKey: Buffer.from(storedData.publicKey, 'base64'),
+                    credentialID: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
+                    credentialPublicKey: new Uint8Array(Buffer.from(storedData.publicKey, 'base64')),
                     counter: storedData.counter,
                 },
                 requireUserVerification: true,
@@ -531,7 +542,6 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
             if (!verification.verified)
                 return res.status(400).json({ success: false, message: 'Fingerprint not recognized' });
 
-            // Update counter
             db.run(
                 `UPDATE webauthn_credentials SET public_key = ? WHERE reg_number = ?`,
                 [JSON.stringify({
