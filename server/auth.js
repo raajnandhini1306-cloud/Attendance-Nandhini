@@ -392,15 +392,21 @@ router.post('/api/webauthn/register-options', async (req, res) => {
         });
 
         db.run(
-            `INSERT INTO webauthn_credentials (reg_number, credential_id, public_key, counter, registered_at)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO webauthn_credentials (reg_number, credential_id, public_key, current_challenge, counter, registered_at)
+             VALUES (?, 'pending', 'pending', ?, 0, ?)
              ON CONFLICT(reg_number) DO UPDATE SET
              credential_id = 'pending',
-             public_key = ?`,
-            [reg_number, 'pending', JSON.stringify({ challenge: options.challenge }), 0, Date.now(), JSON.stringify({ challenge: options.challenge })],
+             public_key = 'pending',
+             current_challenge = ?`,
+            [reg_number, options.challenge, Date.now(), options.challenge],
+            (err) => {
+                if (err) {
+                    console.error('Insert error:', err);
+                    return res.status(500).json({ success: false, message: 'DB error saving challenge' });
+                }
+                res.json({ success: true, options });
+            }
         );
-
-        res.json({ success: true, options });
     } catch (err) {
         console.error('WebAuthn register options error:', err);
         res.status(500).json({ success: false, message: 'Failed to generate registration options' });
@@ -418,12 +424,9 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No pending registration' });
 
         try {
-            const storedData = JSON.parse(row.public_key);
-            const expectedChallenge = storedData.challenge;
-
             const verification = await verifyRegistrationResponse({
                 response,
-                expectedChallenge,
+                expectedChallenge: row.current_challenge,
                 expectedOrigin: 'https://no-proxy-attendance.onrender.com',
                 expectedRPID: 'no-proxy-attendance.onrender.com',
                 requireUserVerification: true,
@@ -433,8 +436,6 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
                 return res.status(400).json({ success: false, message: 'Fingerprint verification failed' });
 
             const info = verification.registrationInfo;
-            console.log('registrationInfo keys:', Object.keys(info));
-
             const credentialID = info.credentialID || info.credential?.id;
             const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
             const counter = info.counter ?? info.credential?.counter ?? 0;
@@ -443,6 +444,7 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
                 `UPDATE webauthn_credentials SET
                  credential_id = ?,
                  public_key = ?,
+                 current_challenge = NULL,
                  counter = ?
                  WHERE reg_number = ?`,
                 [
@@ -458,7 +460,7 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             );
         } catch (err) {
             console.error('WebAuthn register verify error:', err);
-            res.status(500).json({ success: false, message: 'Registration verification failed' });
+            res.status(500).json({ success: false, message: 'Registration verification failed: ' + err.message });
         }
     });
 });
@@ -487,28 +489,20 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
                 timeout: 60000,
             });
 
-            // Parse existing stored data to get the real public key
-            let existingPublicKey = row.public_key;
-            try {
-                const parsed = JSON.parse(row.public_key);
-                existingPublicKey = parsed.publicKey || row.public_key;
-            } catch(e) {
-                existingPublicKey = row.public_key;
-            }
-
             db.run(
-                `UPDATE webauthn_credentials SET public_key = ? WHERE reg_number = ?`,
-                [JSON.stringify({
-                    challenge: options.challenge,
-                    publicKey: existingPublicKey,
-                    counter: row.counter
-                }), reg_number]
+                `UPDATE webauthn_credentials SET current_challenge = ? WHERE reg_number = ?`,
+                [options.challenge, reg_number],
+                (err) => {
+                    if (err) {
+                        console.error('Failed to save challenge:', err);
+                        return res.status(500).json({ success: false, message: 'DB error' });
+                    }
+                    res.json({ success: true, options });
+                }
             );
-
-            res.json({ success: true, options });
         } catch (err) {
             console.error('WebAuthn auth options error:', err);
-            res.status(500).json({ success: false, message: 'Failed to generate auth options' });
+            res.status(500).json({ success: false, message: 'Failed to generate auth options: ' + err.message });
         }
     });
 });
@@ -524,17 +518,15 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No credential found' });
 
         try {
-            const storedData = JSON.parse(row.public_key);
-
             const verification = await verifyAuthenticationResponse({
                 response,
-                expectedChallenge: storedData.challenge,
+                expectedChallenge: row.current_challenge,
                 expectedOrigin: 'https://no-proxy-attendance.onrender.com',
                 expectedRPID: 'no-proxy-attendance.onrender.com',
                 authenticator: {
                     credentialID: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
-                    credentialPublicKey: new Uint8Array(Buffer.from(storedData.publicKey, 'base64')),
-                    counter: storedData.counter,
+                    credentialPublicKey: new Uint8Array(Buffer.from(row.public_key, 'base64')),
+                    counter: row.counter,
                 },
                 requireUserVerification: true,
             });
@@ -543,18 +535,14 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
                 return res.status(400).json({ success: false, message: 'Fingerprint not recognized' });
 
             db.run(
-                `UPDATE webauthn_credentials SET public_key = ? WHERE reg_number = ?`,
-                [JSON.stringify({
-                    challenge: storedData.challenge,
-                    publicKey: storedData.publicKey,
-                    counter: verification.authenticationInfo.newCounter
-                }), reg_number]
+                `UPDATE webauthn_credentials SET counter = ?, current_challenge = NULL WHERE reg_number = ?`,
+                [verification.authenticationInfo.newCounter, reg_number]
             );
 
             res.json({ success: true, message: 'Fingerprint verified' });
         } catch (err) {
             console.error('WebAuthn auth verify error:', err);
-            res.status(500).json({ success: false, message: 'Authentication failed' });
+            res.status(500).json({ success: false, message: 'Authentication failed: ' + err.message });
         }
     });
 });
