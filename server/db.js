@@ -41,6 +41,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         reg_number TEXT UNIQUE NOT NULL,
         credential_id TEXT NOT NULL,
         public_key TEXT NOT NULL,
+        current_challenge TEXT,
         counter INTEGER DEFAULT 0,
         registered_at INTEGER NOT NULL
         )`);
