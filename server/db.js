@@ -9,6 +9,18 @@ const db = new sqlite3.Database(dbPath, (err) => {
     } else {
         console.log("Connected to SQLite database");
 
+        db.run(`DROP TABLE IF EXISTS webauthn_credentials`, () => {
+            db.run(`CREATE TABLE IF NOT EXISTS webauthn_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reg_number TEXT UNIQUE NOT NULL,
+                credential_id TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                current_challenge TEXT,
+                counter INTEGER DEFAULT 0,
+                registered_at INTEGER NOT NULL
+            )`);
+        });
+
         db.run(`CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -35,15 +47,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 reg_number TEXT UNIQUE NOT NULL,
                 fingerprint TEXT NOT NULL,
                 registered_at INTEGER NOT NULL
-        )`);
-        db.run(`CREATE TABLE IF NOT EXISTS webauthn_credentials (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reg_number TEXT UNIQUE NOT NULL,
-        credential_id TEXT NOT NULL,
-        public_key TEXT NOT NULL,
-        current_challenge TEXT,
-        counter INTEGER DEFAULT 0,
-        registered_at INTEGER NOT NULL
         )`);
         db.run(`CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
