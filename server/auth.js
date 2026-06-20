@@ -551,5 +551,12 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
         }
     });
 });
-
+router.get('/api/debug-webauthn/:reg_number', (req, res) => {
+    db.get(`SELECT reg_number, credential_id, counter, registered_at FROM webauthn_credentials WHERE reg_number = ?`,
+        [req.params.reg_number],
+        (err, row) => {
+            res.json({ row, err: err?.message });
+        }
+    );
+});
 module.exports = router;
