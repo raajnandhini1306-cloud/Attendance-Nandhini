@@ -5,26 +5,34 @@
     <title>Check Proxy - Location View</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <!-- Add OverlappingMarkerSpiderfier Plugin -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/OverlappingMarkerSpiderfier-Leaflet/0.2.6/oms.min.js"></script>
     <style>
-        #map {
-            height: 90vh;
-            width: 100%;
-            margin: 20px auto;
-            border-radius: 10px;
+        body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; }
+        h2 { margin-top: 20px; }
+        #map { height: 85vh; width: 100%; margin: 10px auto; border-radius: 10px; }
+        .controls { margin: 10px; }
+        .controls input {
+            padding: 8px 12px;
+            font-size: 14px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            margin-right: 8px;
         }
-
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
+        .controls button {
+            padding: 8px 16px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
         }
-
-        h2 {
-            margin-top: 20px;
+        .controls button:hover { background: #2980b9; }
+        #status {
+            font-size: 13px;
+            color: #27ae60;
+            margin: 4px;
         }
-        
-        /* Add styling for marker counter */
         .marker-count {
             background-color: #3388ff;
             border-radius: 50%;
@@ -37,122 +45,150 @@
             justify-content: center;
             border: 2px solid white;
         }
-        
         .multi-student-popup .student-entry {
             border-bottom: 1px solid #eee;
             padding: 5px 0;
         }
-        
         .multi-student-popup .student-entry:last-child {
             border-bottom: none;
         }
     </style>
 </head>
 <body>
-    <h2>Student Locations - Proxy Check</h2>
+    <h2>Student Locations — Live Proxy Check</h2>
+
+    <div class="controls">
+        <input type="text" id="classroomInput" placeholder="Classroom ID (e.g. AB3)">
+        <button onclick="startLive()">Start Live View</button>
+        <button onclick="stopLive()" style="background:#e74c3c;">Stop</button>
+    </div>
+    <div id="status">Enter classroom ID and click Start Live View</div>
+
     <div id="map"></div>
 
     <script>
-      async function loadStudentLocations() {
-          const groupNumber = prompt("Enter group number (e.g., 1, 2, 3):");
-          if (!groupNumber || isNaN(groupNumber)) {
-              alert("Invalid group number");
-              return;
-          }
-  
-          const res = await fetch(`/api/check-proxy?group=${groupNumber}`);
-          const data = await res.json();
-          console.log("Fetched locations:", data);
-  
-          if (!data.success || !data.locations.length) {
-              alert("No student location data found for this group.");
-              return;
-          }
-  
-          const map = L.map('map').setView([12.84, 80.15], 17);
-  
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              maxZoom: 190,
-              detectRetina: true 
-          }).addTo(map);
-          
-          // Initialize the OverlappingMarkerSpiderfier
-          const oms = new OverlappingMarkerSpiderfier(map);
-          
-          // Create popup object to be reused
-          const popup = new L.Popup();
-          
-          // Add click listener to spiderfied markers
-          oms.addListener('click', function(marker) {
-              popup.setContent(marker.desc);
-              popup.setLatLng(marker.getLatLng());
-              map.openPopup(popup);
-          });
-          
-          // Close popup when spiderfying
-          oms.addListener('spiderfy', function(markers) {
-              map.closePopup();
-          });
-          
-          // Alternative approach: Group markers by exact location
-          const locationGroups = {};
-          
-          // Group students by exact coordinates
-          data.locations.forEach(student => {
-              if (student.latitude && student.longitude) {
-                  const key = `${student.latitude},${student.longitude}`;
-                  if (!locationGroups[key]) {
-                      locationGroups[key] = [];
-                  }
-                  locationGroups[key].push(student);
-              }
-          });
-          
-          // Add markers based on location groups
-          Object.entries(locationGroups).forEach(([coords, students]) => {
-              const [lat, lng] = coords.split(',');
-              const count = students.length;
-              
-              // Create marker with default Leaflet icon
-              const marker = L.marker([parseFloat(lat), parseFloat(lng)]);
-              
-              // Create custom icon with count if more than one student
-              if (count > 1) {
-                  marker.setIcon(L.divIcon({
-                      html: `<div class="marker-count">${count}</div>`,
-                      className: 'custom-marker',
-                      iconSize: [30, 30]
-                  }));
-              }
-              
-              // Create popup with all students at this location
-              let popupContent = '<div class="multi-student-popup">';
-              students.forEach(student => {
-                  popupContent += `
-                      <div class="student-entry">
-                          <b>${student.name}</b><br>
-                          ${student.reg_number}<br>
-                          Time: ${student.time}
-                      </div>
-                  `;
-              });
-              popupContent += '</div>';
-              
-              // Store popup content in marker for spiderfier
-              marker.desc = popupContent;
-              
-              // Add popup to marker
-              marker.bindPopup(popupContent);
-              
-              // Add marker to map
-              marker.addTo(map);
-              
-              // Register marker with spiderfier
-              oms.addMarker(marker);
-          });
-      }
-  
-      loadStudentLocations();
+        let map = null;
+        let oms = null;
+        let popup = null;
+        let allMarkers = [];
+        let refreshInterval = null;
+        let classroom = null;
+
+        function initMap(lat, lng) {
+            if (map) return;
+            map = L.map('map').setView([lat, lng], 18);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                detectRetina: true
+            }).addTo(map);
+
+            oms = new OverlappingMarkerSpiderfier(map);
+            popup = new L.Popup();
+
+            oms.addListener('click', function(marker) {
+                popup.setContent(marker.desc);
+                popup.setLatLng(marker.getLatLng());
+                map.openPopup(popup);
+            });
+
+            oms.addListener('spiderfy', function() {
+                map.closePopup();
+            });
+        }
+
+        function clearMarkers() {
+            allMarkers.forEach(m => map.removeLayer(m));
+            allMarkers = [];
+            if (oms) oms.clearMarkers();
+        }
+
+        async function fetchAndRender() {
+            if (!classroom) return;
+
+            const res = await fetch(`/api/check-proxy?classroom=${classroom}`);
+            const data = await res.json();
+
+            const now = new Date().toLocaleTimeString();
+
+            if (!data.success || !data.locations.length) {
+                document.getElementById('status').textContent = `Last checked: ${now} — No students yet`;
+                return;
+            }
+
+            // Init map on first data
+            initMap(data.locations[0].latitude, data.locations[0].longitude);
+
+            // Clear old markers
+            clearMarkers();
+
+            // Group by exact location
+            const locationGroups = {};
+            data.locations.forEach(student => {
+                if (student.latitude && student.longitude) {
+                    const key = `${student.latitude},${student.longitude}`;
+                    if (!locationGroups[key]) locationGroups[key] = [];
+                    locationGroups[key].push(student);
+                }
+            });
+
+            // Add markers
+            Object.entries(locationGroups).forEach(([coords, students]) => {
+                const [lat, lng] = coords.split(',');
+                const count = students.length;
+
+                const marker = L.marker([parseFloat(lat), parseFloat(lng)]);
+
+                if (count > 1) {
+                    marker.setIcon(L.divIcon({
+                        html: `<div class="marker-count">${count}</div>`,
+                        className: 'custom-marker',
+                        iconSize: [30, 30]
+                    }));
+                }
+
+                let popupContent = '<div class="multi-student-popup">';
+                students.forEach(student => {
+                    popupContent += `
+                        <div class="student-entry">
+                            <b>${student.name}</b><br>
+                            ${student.reg_number}<br>
+                            Time: ${student.time}
+                        </div>`;
+                });
+                popupContent += '</div>';
+
+                marker.desc = popupContent;
+                marker.bindPopup(popupContent);
+                marker.addTo(map);
+                oms.addMarker(marker);
+                allMarkers.push(marker);
+            });
+
+            document.getElementById('status').textContent =
+                `Live — ${data.locations.length} student(s) marked — Last updated: ${now}`;
+        }
+
+        function startLive() {
+            classroom = document.getElementById('classroomInput').value.trim();
+            if (!classroom) return alert('Enter classroom ID.');
+
+            // Clear any existing interval
+            if (refreshInterval) clearInterval(refreshInterval);
+
+            document.getElementById('status').textContent = 'Loading...';
+
+            // Fetch immediately then every 10 seconds
+            fetchAndRender();
+            refreshInterval = setInterval(fetchAndRender, 10000);
+        }
+
+        function stopLive() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+                document.getElementById('status').textContent = 'Live view stopped.';
+            }
+        }
     </script>
 </body>
 </html>

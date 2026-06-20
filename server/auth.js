@@ -1,357 +1,555 @@
 const express = require('express');
 const router = express.Router();
 const db = require('./db');
+const { v4: uuidv4 } = require('uuid');
+const {
+    generateRegistrationOptions,
+    verifyRegistrationResponse,
+    generateAuthenticationOptions,
+    verifyAuthenticationResponse
+} = require('@simplewebauthn/server');
 
-let attendanceStartTime = null;
-let attendanceTimeLimit = null;
+function generateBoardCode() {
+    return String(Math.floor(1000 + Math.random() * 9000));
+}
 
-router.post('/start-attendance', (req, res) => {
-    const { timeLimit } = req.body;
-
-    if (!timeLimit || timeLimit <= 0) {
-        return res.status(400).json({ success: false, message: 'Invalid time limit' });
-    }
-
-    attendanceStartTime = Date.now();
-    attendanceTimeLimit = timeLimit * 60 * 1000; 
-
-    res.json({ success: true, message: `Attendance started for ${timeLimit} minute(s)` });
-});
-
-router.post('/mark-attendance', (req, res) => {
-    const { reg_number, latitude, longitude, classroom } = req.body;
-    const currentTime = Date.now();
+function getNow() {
     const now = new Date();
-    const date = new Date().toISOString().split('T')[0];
-    const time = now.toLocaleTimeString('en-GB', { hour12: false, timeZone: 'Asia/Kolkata' });
-
-    if (!attendanceStartTime || !attendanceTimeLimit) {
-        return res.status(400).json({ success: false, message: 'Attendance has not started' });
-    }
-
-    const timeElapsed = currentTime - attendanceStartTime;
-    let status = 'Absent'; 
-
-    if (timeElapsed <= attendanceTimeLimit) {
-
-        const point = { lat: latitude, lng: longitude };
-const allAreas = require('./allowedArea.json');
-
-// Case-insensitive classroom name lookup
-const classKey = Object.keys(allAreas).find(
-  key => key.toLowerCase() === classroom.toLowerCase()
-);
-
-const allowedArea = allAreas[classKey];
-
-if (!allowedArea) {
-  return res.status(400).json({
-    success: false,
-    message: 'Invalid classroom ID or area not defined'
-  });
+    const date = now.toISOString().split('T')[0];
+    const time = now.toLocaleTimeString('en-GB', {
+        hour12: false,
+        timeZone: 'Asia/Kolkata'
+    });
+    return { date, time };
 }
 
-
-        function isInsidePolygon(point, polygon) {
-            let x = point.lat, y = point.lng;
-            let inside = false;
-
-            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-                let xi = polygon[i].lat, yi = polygon[i].lng;
-                let xj = polygon[j].lat, yj = polygon[j].lng;
-
-                let intersect = ((yi > y) !== (yj > y)) &&
-                    (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-10) + xi);
-                if (intersect) inside = !inside;
-            }
-
-            return inside;
-        }
-
-        // --- Distance helper: Haversine formula ---
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth radius in meters
-  const toRad = (x) => (x * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+    const R = 6371000;
+    const toRad = x => (x * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// --- GeoFence check with buffer ---
-const insideGeoFence = isInsidePolygon(point, allowedArea);
-
-// If not inside polygon, check if within 10 m of any vertex
-let nearBoundary = false;
-if (!insideGeoFence) {
-  for (let vertex of allowedArea) {
-    const dist = getDistanceMeters(
-      point.lat,
-      point.lng,
-      vertex.lat,
-      vertex.lng
-    );
-    if (dist <= 30) { // 10 m tolerance
-      nearBoundary = true;
-      break;
-    }
-  }
-}
-
-status = insideGeoFence || nearBoundary ? 'Present' : 'Absent';
-
-    }
-
-    db.run(
-        `INSERT INTO attendance (reg_number, date, time, status) VALUES (?, ?, ?, ?)`,
-        [reg_number, date, time, status],
-        (err) => {
-            if (err) {
-                res.status(500).json({ success: false, message: 'Database error (attendance)' });
-            } else {
-                db.run(
-                    `INSERT INTO location (reg_number, latitude, longitude, date, time) VALUES (?, ?, ?, ?, ?)`,
-                    [reg_number, latitude, longitude, date, time],
-                    (locErr) => {
-                        if (locErr) {
-                            res.status(500).json({ success: false, message: 'Database error (location)' });
-                        } else {
-                            let msg;
-                            if (timeElapsed > attendanceTimeLimit) {
-                                msg = 'Attendance session expired, marked as Absent';
-                            } else {
-                                msg = status === 'Present'
-                                ? 'Attendance marked as Present (within allowed area)'
-                                : `You are outside the allowed area — marked as Absent. Your location: (${latitude}, ${longitude})`;
-                            }
-                            res.json({ success: status === 'Present', message: msg, date, time });
-
-                        }
-                    }
-                );
-            }
-        }
-    );
-});
-const groupByTime = (records, interval = 2) => {
-    const groups = [];
-    let currentGroup = [];
-    let lastTime = null;
-    const seenRegNumbers = new Set(); // Set to track seen registration numbers
-
-    records.forEach(record => {
-        const [hours, minutes, seconds] = record.time.split(':').map(Number);
-        const totalMinutes = hours * 60 + minutes + seconds / 60;
-
-        // Check if the registration number has already been added in this group
-        if (!seenRegNumbers.has(record.reg_number)) {
-            if (!lastTime || (totalMinutes - lastTime) <= interval) {
-                currentGroup.push(record);
-                seenRegNumbers.add(record.reg_number); // Add to seen set
-            } else {
-                groups.push(currentGroup);
-                currentGroup = [record];
-                seenRegNumbers.clear(); // Clear seen set for the new group
-                seenRegNumbers.add(record.reg_number);
-            }
-        }
-
-        lastTime = totalMinutes;
-    });
-
-    if (currentGroup.length) {
-        groups.push(currentGroup);
-    }
-
-    return groups;
-};
-
-
-router.post('/view-attendance', (req, res) => {
-    const { reg_number } = req.body;
-    db.all(`
-        SELECT date, time, status 
-        FROM attendance 
-        WHERE reg_number = ? 
-        ORDER BY datetime(date || ' ' || time) DESC
-    `, [reg_number], (err, rows) => {
-        if (err) {
-            res.status(500).json({ message: 'Database error' });
-        } else {
-            res.json({ success: true, attendance: rows });
-        }
-    });    
-});
-
-// const groupByTime = (records, interval = 2) => {
-//     const groups = [];
-//     let currentGroup = [];
-//     let lastTime = null;
-
-//     records.forEach(record => {
-//         const [hours, minutes, seconds] = record.time.split(':').map(Number);
-//         const totalMinutes = hours * 60 + minutes + seconds / 60;
-
-//         if (!lastTime || (totalMinutes - lastTime) <= interval) {
-//             currentGroup.push(record);
-//         } else {
-//             groups.push(currentGroup);
-//             currentGroup = [record];
-//         }
-
-//         lastTime = totalMinutes;
-//     });
-
-//     if (currentGroup.length) {
-//         groups.push(currentGroup);
-//     }
-
-//     return groups;
-// };
-
-router.post('/faculty-view-attendance', (req, res) => {
-    const date = new Date().toISOString().split('T')[0];
-
-    db.all(`SELECT students.name, students.reg_number, attendance.time, attendance.date FROM attendance 
-            JOIN students ON attendance.reg_number = students.reg_number 
-            WHERE attendance.date = ? AND attendance.status = 'Present'
-            ORDER BY attendance.time ASC`, [date], (err, rows) => {
-        if (err) {
-            res.status(500).json({ message: 'Database error' });
-        } else {
-            const grouped = groupByTime(rows);
-            // Sort each group by reg_number
-            grouped.forEach(group => {
-                group.sort((a, b) => a.reg_number.localeCompare(b.reg_number));
-            });
-            res.json({ success: true, groupedAttendance: grouped });
-        }
-    });
-});
-router.get('/check-proxy', (req, res) => {
-    const date = new Date().toISOString().split('T')[0];
-    const groupIndex = parseInt(req.query.group || "1", 10) - 1;
-
-    db.all(`
-        SELECT s.name, s.reg_number, l.latitude, l.longitude, l.time, a.time AS attendance_time
-        FROM attendance a
-        JOIN students s ON s.reg_number = a.reg_number
-        JOIN location l ON l.reg_number = s.reg_number AND l.date = ?
-        WHERE a.date = ? AND a.status = 'Present'
-        ORDER BY a.time ASC
-    `, [date, date], (err, rows) => {
-        if (err) {
-            console.error(err);
-            return res.json({ success: false, message: 'Database error' });
-        }
-
-        const grouped = groupByTime(rows); // already defined function
-        if (groupIndex >= grouped.length) {
-            return res.json({ success: true, locations: [] });
-        }
-
-        const selectedGroup = grouped[groupIndex] || [];
-        // --- Filter to latest location per student ---
-        const latestLocations = {};
-        selectedGroup.forEach(record => {
-            if (
-                !latestLocations[record.reg_number] ||
-                record.time > latestLocations[record.reg_number].time
-            ) {
-                latestLocations[record.reg_number] = record;
-            }
-        });
-        const uniqueLocations = Object.values(latestLocations);
-
-        res.json({ success: true, locations: uniqueLocations });
-    });
-});
-
-// router.get('/api/check-proxy', (req, res) => {
-//     const date = new Date().toISOString().split('T')[0];
-//     console.log("Check proxy API called");
-//     const sql = `
-//         SELECT s.name, s.reg_number, l.latitude, l.longitude, l.time
-//         FROM attendance a
-//         JOIN students s ON s.reg_number = a.reg_number
-//         JOIN (
-//             SELECT reg_number, MAX(time) AS max_time
-//             FROM location
-//             WHERE date = ?
-//             GROUP BY reg_number
-//         ) latest ON latest.reg_number = a.reg_number
-//         JOIN location l ON l.reg_number = latest.reg_number AND l.time = latest.max_time
-//         WHERE a.date = ? AND a.status = 'Present'
-//     `;
-
-//     db.all(sql, [date, date], (err, rows) => {
-//         if (err) {
-//             console.error(err);
-//             res.json({ success: false, message: 'Database error' });
-//         } else {
-//             res.json({ success: true, locations: rows });
-//         }
-//     });
-// });
-
-
-router.post('/login', (req, res) => {
-    const { username, identifier, role } = req.body;
+// ─── LOGIN ───────────────────────────────────────────────────────────
+router.post('/api/login', (req, res) => {
+    const { username, identifier, role, fingerprint } = req.body;
     const table = role === 'student' ? 'students' : 'faculty';
     const column = role === 'student' ? 'reg_number' : 'faculty_id';
 
-    console.log(`Login Attempt - Name: ${username}, ID: ${identifier}, Role: ${role}`);
+    db.get(
+        `SELECT * FROM ${table} WHERE name = ? AND ${column} = ?`,
+        [username, identifier],
+        (err, row) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            if (!row) return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
-    db.get(`SELECT * FROM ${table} WHERE name = ? AND ${column} = ?`, [username, identifier], (err, row) => {
-        if (err) {
-            console.error("Database error:", err.message);
-            res.status(500).json({ success: false, message: 'Database error' });
-        } else if (row) {
-            console.log("Login successful for:", row);
-            res.json({ success: true, role });
-        } else {
-            console.log("Invalid credentials");
-            res.status(401).json({ success: false, message: 'Invalid credentials' });
+            if (role !== 'student') {
+                return res.json({ success: true, role, name: row.name, identifier });
+            }
+
+            db.get(
+                `SELECT * FROM device_fingerprints WHERE reg_number = ?`,
+                [identifier],
+                (err, fpRow) => {
+                    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+
+                    if (!fpRow) {
+                        db.run(
+                            `INSERT INTO device_fingerprints (reg_number, fingerprint, registered_at)
+                             VALUES (?, ?, ?)`,
+                            [identifier, fingerprint, Date.now()],
+                            (err) => {
+                                if (err) return res.status(500).json({ success: false, message: 'Failed to register device' });
+                                res.json({ success: true, role, name: row.name, identifier, deviceRegistered: true });
+                            }
+                        );
+                    } else {
+                        if (fpRow.fingerprint !== fingerprint) {
+                            return res.status(401).json({
+                                success: false,
+                                message: 'This account is registered to a different device. Please use your registered device.'
+                            });
+                        }
+                        res.json({ success: true, role, name: row.name, identifier, deviceRegistered: false });
+                    }
+                }
+            );
         }
-    });
+    );
 });
-router.post('/signup', (req, res) => {
-    const { username, identifier, role } = req.body;
 
-    if (!username || !identifier || !role) {
+// ─── SIGNUP ──────────────────────────────────────────────────────────
+router.post('/api/signup', (req, res) => {
+    const { username, identifier, role } = req.body;
+    if (!username || !identifier || !role)
         return res.status(400).json({ success: false, message: 'Missing fields' });
-    }
 
     const table = role === 'student' ? 'students' : 'faculty';
     const column = role === 'student' ? 'reg_number' : 'faculty_id';
 
     db.get(`SELECT * FROM ${table} WHERE ${column} = ?`, [identifier], (err, row) => {
-        if (err) {
-            console.error("Database error:", err.message);
-            return res.status(500).json({ success: false, message: 'Database error' });
-        }
+        if (err) return res.status(500).json({ success: false, message: 'Database error' });
+        if (row) return res.status(400).json({ success: false, message: `${role} already registered` });
 
-        if (row) {
-            return res.status(400).json({ success: false, message: `${role.charAt(0).toUpperCase() + role.slice(1)} already registered` });
-        }
-
-        db.run(`INSERT INTO ${table} (name, ${column}) VALUES (?, ?)`, [username, identifier], function (err) {
-            if (err) {
-                console.error("Insert error:", err.message);
-                return res.status(500).json({ success: false, message: `Failed to register ${role}` });
+        db.run(
+            `INSERT INTO ${table} (name, ${column}) VALUES (?, ?)`,
+            [username, identifier],
+            function (err) {
+                if (err) return res.status(500).json({ success: false, message: 'Registration failed' });
+                res.json({ success: true, message: 'Registered successfully' });
             }
+        );
+    });
+});
 
-            console.log(`${role} registered:`, { id: this.lastID, name: username, identifier });
-            res.json({ success: true });
+// ─── SET CLASSROOM LOCATION ───────────────────────────────────────────
+router.post('/api/set-classroom-location', (req, res) => {
+    const { classroom_id, latitude, longitude, faculty_id, radius } = req.body;
+
+    if (!classroom_id || !latitude || !longitude || !faculty_id)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    db.run(
+        `INSERT INTO classrooms (classroom_id, center_lat, center_lng, radius, set_by, set_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(classroom_id) DO UPDATE SET
+         center_lat = excluded.center_lat,
+         center_lng = excluded.center_lng,
+         radius = excluded.radius,
+         set_by = excluded.set_by,
+         set_at = excluded.set_at`,
+        [classroom_id, latitude, longitude, radius || 30, faculty_id, Date.now()],
+        function (err) {
+            if (err) return res.status(500).json({ success: false, message: 'Failed to save location' });
+            res.json({
+                success: true,
+                message: `Location set for ${classroom_id}`,
+                latitude,
+                longitude,
+                radius: radius || 30
+            });
+        }
+    );
+});
+
+// ─── START ATTENDANCE ─────────────────────────────────────────────────
+router.post('/api/start-attendance', (req, res) => {
+    const { faculty_id, classroom, timeLimit } = req.body;
+
+    if (!faculty_id || !classroom || !timeLimit)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    db.get(
+        `SELECT * FROM classrooms WHERE classroom_id = ?`,
+        [classroom],
+        (err, classroomRow) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            if (!classroomRow)
+                return res.status(400).json({
+                    success: false,
+                    message: 'Classroom location not set. Please set your location first.'
+                });
+
+            db.run(
+                `UPDATE sessions SET is_active = 0 WHERE classroom = ? AND is_active = 1`,
+                [classroom],
+                (err) => {
+                    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+
+                    const token = uuidv4();
+                    const boardCode = generateBoardCode();
+                    const startTime = Date.now();
+                    const expiryTime = startTime + timeLimit * 60 * 1000;
+
+                    db.run(
+                        `INSERT INTO sessions (token, board_code, classroom, started_by, start_time, expiry_time, is_active)
+                         VALUES (?, ?, ?, ?, ?, ?, 1)`,
+                        [token, boardCode, classroom, faculty_id, startTime, expiryTime],
+                        function (err) {
+                            if (err) return res.status(500).json({ success: false, message: 'Failed to create session' });
+                            res.json({
+                                success: true,
+                                token,
+                                boardCode,
+                                classroom,
+                                expiryTime,
+                                message: `Attendance started for ${timeLimit} minute(s). Board code: ${boardCode}`
+                            });
+                        }
+                    );
+                }
+            );
+        }
+    );
+});
+
+// ─── ACTIVE SESSION (ESP32 polls this) ────────────────────────────────
+router.get('/api/active-session', (req, res) => {
+    const classroom = req.query.classroom;
+    if (!classroom)
+        return res.status(400).json({ success: false, message: 'Classroom required' });
+
+    const now = Date.now();
+
+    db.get(
+        `SELECT * FROM sessions
+         WHERE classroom = ? AND is_active = 1 AND expiry_time > ?
+         ORDER BY start_time DESC LIMIT 1`,
+        [classroom, now],
+        (err, row) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            if (!row) return res.sendStatus(204);
+            res.json({ token: row.token, boardCode: row.board_code, expiryTime: row.expiry_time });
+        }
+    );
+});
+
+// ─── MARK ATTENDANCE ──────────────────────────────────────────────────
+router.post('/api/mark-attendance', (req, res) => {
+    const { reg_number, latitude, longitude, classroom, boardCode, sessionToken, fingerprint } = req.body;
+
+    if (!reg_number || !latitude || !longitude || !classroom || !boardCode || !sessionToken || !fingerprint)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    const now = Date.now();
+    const { date, time } = getNow();
+
+    // Step 0 — Validate device fingerprint
+    db.get(
+        `SELECT * FROM device_fingerprints WHERE reg_number = ?`,
+        [reg_number],
+        (err, fpRow) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            if (!fpRow) return res.status(400).json({ success: false, message: 'Device not registered. Please log in first.' });
+            if (fpRow.fingerprint !== fingerprint)
+                return res.status(400).json({ success: false, message: 'Wrong device. Please use your registered device.' });
+
+            // Step 1 — Validate session
+            db.get(
+                `SELECT * FROM sessions
+                 WHERE token = ? AND classroom = ? AND is_active = 1 AND expiry_time > ?`,
+                [sessionToken, classroom, now],
+                (err, session) => {
+                    if (err) return res.status(500).json({ success: false, message: 'Database error' });
+                    if (!session)
+                        return res.status(400).json({ success: false, message: 'No active session — time may have expired' });
+
+                    // Step 2 — Validate board code
+                    if (session.board_code !== boardCode)
+                        return res.status(400).json({ success: false, message: 'Wrong board code' });
+
+                    // Step 3 — Get classroom location
+                    db.get(
+                        `SELECT * FROM classrooms WHERE classroom_id = ?`,
+                        [classroom],
+                        (err, classroomRow) => {
+                            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+                            if (!classroomRow)
+                                return res.status(400).json({ success: false, message: 'Classroom location not found' });
+
+                            // Step 4 — GPS distance check
+                            const distance = getDistanceMeters(
+                                latitude, longitude,
+                                classroomRow.center_lat, classroomRow.center_lng
+                            );
+
+                            if (distance > classroomRow.radius)
+                                return res.status(400).json({
+                                    success: false,
+                                    message: `You are ${Math.round(distance)}m away. Must be within ${classroomRow.radius}m.`
+                                });
+
+                            // Step 5 — Duplicate check
+                            db.run(
+                                `INSERT INTO attendance (reg_number, session_id, date, time, status)
+                                 VALUES (?, ?, ?, ?, 'Present')`,
+                                [reg_number, session.id, date, time],
+                                function (err) {
+                                    if (err) {
+                                        if (err.message.includes('UNIQUE constraint failed'))
+                                            return res.status(400).json({ success: false, message: 'Attendance already marked for this session' });
+                                        return res.status(500).json({ success: false, message: 'Database error' });
+                                    }
+
+                                    db.run(
+                                        `INSERT INTO location (reg_number, latitude, longitude, date, time)
+                                         VALUES (?, ?, ?, ?, ?)`,
+                                        [reg_number, latitude, longitude, date, time]
+                                    );
+
+                                    res.json({
+                                        success: true,
+                                        message: `Attendance marked. You were ${Math.round(distance)}m from classroom.`,
+                                        date,
+                                        time
+                                    });
+                                }
+                            );
+                        }
+                    );
+                }
+            );
+        }
+    );
+});
+
+// ─── VIEW ATTENDANCE (student) ─────────────────────────────────────────
+router.post('/api/view-attendance', (req, res) => {
+    const { reg_number } = req.body;
+    db.all(
+        `SELECT a.date, a.time, a.status, s.classroom
+         FROM attendance a
+         JOIN sessions s ON a.session_id = s.id
+         WHERE a.reg_number = ?
+         ORDER BY datetime(a.date || ' ' || a.time) DESC`,
+        [reg_number],
+        (err, rows) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            res.json({ success: true, attendance: rows });
+        }
+    );
+});
+
+// ─── VIEW ATTENDANCE (faculty) ─────────────────────────────────────────
+router.post('/api/faculty-view-attendance', (req, res) => {
+    const { classroom } = req.body;
+    const date = new Date().toISOString().split('T')[0];
+
+    db.all(
+        `SELECT st.name, st.reg_number, a.time, a.date, s.classroom
+         FROM attendance a
+         JOIN students st ON a.reg_number = st.reg_number
+         JOIN sessions s ON a.session_id = s.id
+         WHERE a.date = ? AND a.status = 'Present' AND s.classroom = ?
+         ORDER BY a.time ASC`,
+        [date, classroom],
+        (err, rows) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            res.json({ success: true, attendance: rows });
+        }
+    );
+});
+
+// ─── CHECK PROXY ───────────────────────────────────────────────────────
+router.get('/api/check-proxy', (req, res) => {
+    const date = new Date().toISOString().split('T')[0];
+    const classroom = req.query.classroom;
+
+    db.all(
+        `SELECT st.name, st.reg_number, l.latitude, l.longitude, l.time
+         FROM attendance a
+         JOIN students st ON a.reg_number = st.reg_number
+         JOIN sessions s ON a.session_id = s.id
+         JOIN location l ON l.reg_number = st.reg_number AND l.date = ?
+         WHERE a.date = ? AND a.status = 'Present' AND s.classroom = ?
+         ORDER BY a.time ASC`,
+        [date, date, classroom],
+        (err, rows) => {
+            if (err) return res.status(500).json({ success: false, message: 'Database error' });
+            res.json({ success: true, locations: rows });
+        }
+    );
+});
+
+// ─── TEMP RESET ROUTE (remove after use) ─────────────────────────────
+router.get('/api/reset-db', (req, res) => {
+    const tables = ['attendance', 'location', 'sessions', 'device_fingerprints', 'classrooms', 'students', 'faculty', 'webauthn_credentials'];
+    let done = 0;
+    tables.forEach(table => {
+        db.run(`DELETE FROM ${table}`, () => {
+            done++;
+            if (done === tables.length) {
+                res.json({ success: true, message: 'All data cleared' });
+            }
         });
     });
 });
 
+// ─── WEBAUTHN REGISTRATION OPTIONS ───────────────────────────────────
+router.post('/api/webauthn/register-options', async (req, res) => {
+    const { reg_number, name } = req.body;
+    if (!reg_number || !name)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    try {
+        const options = await generateRegistrationOptions({
+            rpName: 'Smart Attendance System',
+            rpID: 'no-proxy-attendance.onrender.com',
+            userID: new TextEncoder().encode(reg_number),
+            userName: reg_number,
+            userDisplayName: name,
+            attestationType: 'none',
+            authenticatorSelection: {
+                authenticatorAttachment: 'platform',
+                userVerification: 'required',
+                residentKey: 'preferred'
+            },
+            timeout: 60000,
+        });
+
+        db.run(
+            `INSERT INTO webauthn_credentials (reg_number, credential_id, public_key, current_challenge, counter, registered_at)
+             VALUES (?, 'pending', 'pending', ?, 0, ?)
+             ON CONFLICT(reg_number) DO UPDATE SET
+             credential_id = 'pending',
+             public_key = 'pending',
+             current_challenge = ?`,
+            [reg_number, options.challenge, Date.now(), options.challenge],
+            (err) => {
+                if (err) {
+                    console.error('Insert error:', err);
+                    return res.status(500).json({ success: false, message: 'DB error saving challenge' });
+                }
+                res.json({ success: true, options });
+            }
+        );
+    } catch (err) {
+        console.error('WebAuthn register options error:', err);
+        res.status(500).json({ success: false, message: 'Failed to generate registration options' });
+    }
+});
+
+// ─── WEBAUTHN REGISTRATION VERIFY ────────────────────────────────────
+router.post('/api/webauthn/register-verify', async (req, res) => {
+    const { reg_number, response } = req.body;
+    if (!reg_number || !response)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    db.get(`SELECT * FROM webauthn_credentials WHERE reg_number = ?`, [reg_number], async (err, row) => {
+        if (err || !row)
+            return res.status(400).json({ success: false, message: 'No pending registration' });
+
+        try {
+            const verification = await verifyRegistrationResponse({
+                response,
+                expectedChallenge: row.current_challenge,
+                expectedOrigin: 'https://no-proxy-attendance.onrender.com',
+                expectedRPID: 'no-proxy-attendance.onrender.com',
+                requireUserVerification: true,
+            });
+
+            if (!verification.verified)
+                return res.status(400).json({ success: false, message: 'Fingerprint verification failed' });
+
+            const info = verification.registrationInfo;
+            const credentialID = info.credentialID || info.credential?.id;
+            const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
+            const counter = info.counter ?? info.credential?.counter ?? 0;
+
+            db.run(
+                `UPDATE webauthn_credentials SET
+                 credential_id = ?,
+                 public_key = ?,
+                 current_challenge = NULL,
+                 counter = ?
+                 WHERE reg_number = ?`,
+                [
+                    Buffer.from(credentialID).toString('base64'),
+                    Buffer.from(credentialPublicKey).toString('base64'),
+                    counter,
+                    reg_number
+                ],
+                (err) => {
+                    if (err) return res.status(500).json({ success: false, message: 'Failed to save credential' });
+                    res.json({ success: true, message: 'Fingerprint registered successfully' });
+                }
+            );
+        } catch (err) {
+            console.error('WebAuthn register verify error:', err);
+            res.status(500).json({ success: false, message: 'Registration verification failed: ' + err.message });
+        }
+    });
+});
+
+// ─── WEBAUTHN AUTHENTICATION OPTIONS ─────────────────────────────────
+router.post('/api/webauthn/auth-options', async (req, res) => {
+    const { reg_number } = req.body;
+    if (!reg_number)
+        return res.status(400).json({ success: false, message: 'Missing reg_number' });
+
+    db.get(`SELECT * FROM webauthn_credentials WHERE reg_number = ? AND credential_id != 'pending'`, [reg_number], async (err, row) => {
+        if (err || !row)
+            return res.status(400).json({ success: false, message: 'No fingerprint registered' });
+
+        try {
+            // ✅ FIX: pass credential_id as a base64url string directly — do NOT convert to Uint8Array
+            // simplewebauthn v10 expects a string here, not a Buffer/Uint8Array
+            const credIdBase64url = row.credential_id
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
+
+            const options = await generateAuthenticationOptions({
+                rpID: 'no-proxy-attendance.onrender.com',
+                allowCredentials: [{
+                    id: credIdBase64url,
+                    type: 'public-key',
+                    transports: ['internal'],
+                }],
+                userVerification: 'required',
+                timeout: 60000,
+            });
+
+            db.run(
+                `UPDATE webauthn_credentials SET current_challenge = ? WHERE reg_number = ?`,
+                [options.challenge, reg_number],
+                (err) => {
+                    if (err) {
+                        console.error('Failed to save challenge:', err);
+                        return res.status(500).json({ success: false, message: 'DB error' });
+                    }
+                    res.json({ success: true, options });
+                }
+            );
+        } catch (err) {
+            console.error('WebAuthn auth options error:', err);
+            res.status(500).json({ success: false, message: 'Failed to generate auth options: ' + err.message });
+        }
+    });
+});
+
+// ─── WEBAUTHN AUTHENTICATION VERIFY ──────────────────────────────────
+router.post('/api/webauthn/auth-verify', async (req, res) => {
+    const { reg_number, response } = req.body;
+    if (!reg_number || !response)
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+
+    db.get(`SELECT * FROM webauthn_credentials WHERE reg_number = ?`, [reg_number], async (err, row) => {
+        if (err || !row)
+            return res.status(400).json({ success: false, message: 'No credential found' });
+
+        try {
+            const verification = await verifyAuthenticationResponse({
+                response,
+                expectedChallenge: row.current_challenge,
+                expectedOrigin: 'https://no-proxy-attendance.onrender.com',
+                expectedRPID: 'no-proxy-attendance.onrender.com',
+                authenticator: {
+                    credentialID: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
+                    credentialPublicKey: new Uint8Array(Buffer.from(row.public_key, 'base64')),
+                    counter: row.counter,
+                },
+                requireUserVerification: true,
+            });
+
+            if (!verification.verified)
+                return res.status(400).json({ success: false, message: 'Fingerprint not recognized' });
+
+            db.run(
+                `UPDATE webauthn_credentials SET counter = ?, current_challenge = NULL WHERE reg_number = ?`,
+                [verification.authenticationInfo.newCounter, reg_number]
+            );
+
+            res.json({ success: true, message: 'Fingerprint verified' });
+        } catch (err) {
+            console.error('WebAuthn auth verify error:', err);
+            res.status(500).json({ success: false, message: 'Authentication failed: ' + err.message });
+        }
+    });
+});
 
 module.exports = router;
