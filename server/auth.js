@@ -476,12 +476,17 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fingerprint registered' });
 
         try {
-            const credIdBuffer = new Uint8Array(Buffer.from(row.credential_id, 'base64'));
+            // ✅ FIX: pass credential_id as a base64url string directly — do NOT convert to Uint8Array
+            // simplewebauthn v10 expects a string here, not a Buffer/Uint8Array
+            const credIdBase64url = row.credential_id
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=/g, '');
 
             const options = await generateAuthenticationOptions({
                 rpID: 'no-proxy-attendance.onrender.com',
                 allowCredentials: [{
-                    id: credIdBuffer,
+                    id: credIdBase64url,
                     type: 'public-key',
                     transports: ['internal'],
                 }],
