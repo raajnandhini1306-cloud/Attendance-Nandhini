@@ -378,7 +378,7 @@ router.post('/api/webauthn/register-options', async (req, res) => {
     try {
         const options = await generateRegistrationOptions({
             rpName: 'Smart Attendance System',
-            rpID: 'no-proxy-attendance.onrender.com',
+            rpID: 'attendance-webauthfix.onrender.com',
             userID: new TextEncoder().encode(reg_number),
             userName: reg_number,
             userDisplayName: name,
@@ -427,8 +427,8 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             const verification = await verifyRegistrationResponse({
                 response,
                 expectedChallenge: row.current_challenge,
-                expectedOrigin: 'https://no-proxy-attendance.onrender.com',
-                expectedRPID: 'no-proxy-attendance.onrender.com',
+                expectedOrigin: 'https://attendance-webauthfix.onrender.com',
+                expectedRPID: 'attendance-webauthfix.onrender.com',
                 requireUserVerification: true,
             });
 
@@ -484,7 +484,7 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
                 .replace(/=/g, '');
 
             const options = await generateAuthenticationOptions({
-                rpID: 'no-proxy-attendance.onrender.com',
+                rpID: 'attendance-webauthfix.onrender.com',
                 allowCredentials: [{
                     id: credIdBase64url,
                     type: 'public-key',
@@ -526,8 +526,8 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
             const verification = await verifyAuthenticationResponse({
                 response,
                 expectedChallenge: row.current_challenge,
-                expectedOrigin: 'https://no-proxy-attendance.onrender.com',
-                expectedRPID: 'no-proxy-attendance.onrender.com',
+                expectedOrigin: 'https://attendance-webauthfix.onrender.com',
+                expectedRPID: 'attendance-webauthfix.onrender.com',
                 authenticator: {
                     credentialID: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
                     credentialPublicKey: new Uint8Array(Buffer.from(row.public_key, 'base64')),
