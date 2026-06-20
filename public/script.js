@@ -347,11 +347,7 @@ async function markAttendance() {
     if (!navigator.geolocation)
         return alert('Geolocation not supported.');
 
-    navigator.geolocation.getCurrentPosition(async (position) => {
-    const latitude = position.coords.latitude;
-    const longitude = position.coords.longitude;
-
-    // Verify fingerprint before submitting
+    // Step 1 — Verify fingerprint FIRST (must be direct user gesture)
     const fingerprintVerified = await verifyFingerprint(reg_number);
     if (!fingerprintVerified) {
         alert('Fingerprint verification failed. Attendance not marked.');
@@ -359,6 +355,11 @@ async function markAttendance() {
     }
 
     const fingerprint = await getFingerprint();
+
+    // Step 2 — Then get GPS
+    navigator.geolocation.getCurrentPosition(async (position) => {
+        const latitude = position.coords.latitude;
+        const longitude = position.coords.longitude;
 
         const res = await fetch('/api/mark-attendance', {
             method: 'POST',
@@ -375,7 +376,6 @@ async function markAttendance() {
         alert('Location access denied. Please allow location.');
     });
 }
-
 // ─── VIEW ATTENDANCE (student) ───────────────────────────────────────
 async function viewAttendance() {
     const reg_number = localStorage.getItem('reg_number');
