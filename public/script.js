@@ -79,6 +79,7 @@ async function verifyFingerprint(reg_number) {
 
         if (!optRes.ok) return false;
         const { options } = await optRes.json();
+        console.log('AUTH OPTIONS:', JSON.stringify(options));
 
         // Decode challenge and credential
         options.challenge = base64ToBuffer(options.challenge);
