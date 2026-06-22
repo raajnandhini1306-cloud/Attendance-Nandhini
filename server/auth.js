@@ -555,7 +555,13 @@ router.get('/api/debug-webauthn/:reg_number', (req, res) => {
     db.get(`SELECT reg_number, credential_id, counter, registered_at FROM webauthn_credentials WHERE reg_number = ?`,
         [req.params.reg_number],
         (err, row) => {
-            res.json({ row, err: err?.message });
+            res.json({ 
+                row, 
+                err: err?.message,
+                credential_id_type: typeof row?.credential_id,
+                is_buffer: Buffer.isBuffer(row?.credential_id),
+                credential_id_raw: row?.credential_id?.toString()
+            });
         }
     );
 });
