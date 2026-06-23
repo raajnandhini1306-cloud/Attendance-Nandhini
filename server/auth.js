@@ -34,6 +34,19 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// ─── helper: normalize any credential ID to base64url string ─────────
+// simplewebauthn v10 returns credentialID as a base64url string already.
+// If it's a Uint8Array/Buffer (older versions), convert it.
+// Either way, output is a clean base64url string with no padding.
+function toBase64url(value) {
+    if (typeof value === 'string') {
+        // already a string — normalize to base64url (strip padding, fix chars)
+        return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+    // Uint8Array or Buffer
+    return Buffer.from(value).toString('base64url');
+}
+
 // ─── LOGIN ───────────────────────────────────────────────────────────
 router.post('/api/login', (req, res) => {
     const { username, identifier, role, fingerprint } = req.body;
@@ -440,6 +453,13 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
             const counter = info.counter ?? info.credential?.counter ?? 0;
 
+            // ✅ FIX: use toBase64url() so we never double-encode a string
+            // and never lose data from a Uint8Array
+            const credIdStored = toBase64url(credentialID);
+            const pubKeyStored = typeof credentialPublicKey === 'string'
+                ? credentialPublicKey
+                : Buffer.from(credentialPublicKey).toString('base64');
+
             db.run(
                 `UPDATE webauthn_credentials SET
                  credential_id = ?,
@@ -447,12 +467,7 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
                  current_challenge = NULL,
                  counter = ?
                  WHERE reg_number = ?`,
-                [
-                    Buffer.from(credentialID).toString('base64'),
-                    Buffer.from(credentialPublicKey).toString('base64'),
-                    counter,
-                    reg_number
-                ],
+                [credIdStored, pubKeyStored, counter, reg_number],
                 (err) => {
                     if (err) return res.status(500).json({ success: false, message: 'Failed to save credential' });
                     res.json({ success: true, message: 'Fingerprint registered successfully' });
@@ -476,12 +491,8 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fingerprint registered' });
 
         try {
-            // ✅ FIX: pass credential_id as a base64url string directly — do NOT convert to Uint8Array
-            // simplewebauthn v10 expects a string here, not a Buffer/Uint8Array
-            const credIdBase64url = row.credential_id
-                .replace(/\+/g, '-')
-                .replace(/\//g, '_')
-                .replace(/=/g, '');
+            // credential_id is already stored as base64url — use directly
+            const credIdBase64url = toBase64url(row.credential_id);
 
             const options = await generateAuthenticationOptions({
                 rpID: 'attendance-webauthfix.onrender.com',
@@ -523,14 +534,20 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No credential found' });
 
         try {
+            // credential_id stored as base64url → decode to Uint8Array for verification
+            const credIdBytes = new Uint8Array(Buffer.from(row.credential_id, 'base64url'));
+
+            // public_key stored as standard base64 → decode to Uint8Array
+            const pubKeyBytes = new Uint8Array(Buffer.from(row.public_key, 'base64'));
+
             const verification = await verifyAuthenticationResponse({
                 response,
                 expectedChallenge: row.current_challenge,
                 expectedOrigin: 'https://attendance-webauthfix.onrender.com',
                 expectedRPID: 'attendance-webauthfix.onrender.com',
                 authenticator: {
-                    credentialID: new Uint8Array(Buffer.from(row.credential_id, 'base64')),
-                    credentialPublicKey: new Uint8Array(Buffer.from(row.public_key, 'base64')),
+                    credentialID: credIdBytes,
+                    credentialPublicKey: pubKeyBytes,
                     counter: row.counter,
                 },
                 requireUserVerification: true,
@@ -551,12 +568,14 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
         }
     });
 });
+
+// ─── DEBUG ENDPOINT (remove before production) ────────────────────────
 router.get('/api/debug-webauthn/:reg_number', (req, res) => {
     db.get(`SELECT reg_number, credential_id, counter, registered_at FROM webauthn_credentials WHERE reg_number = ?`,
         [req.params.reg_number],
         (err, row) => {
-            res.json({ 
-                row, 
+            res.json({
+                row,
                 err: err?.message,
                 credential_id_type: typeof row?.credential_id,
                 is_buffer: Buffer.isBuffer(row?.credential_id),
@@ -565,4 +584,5 @@ router.get('/api/debug-webauthn/:reg_number', (req, res) => {
         }
     );
 });
+
 module.exports = router;
