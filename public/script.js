@@ -368,44 +368,44 @@ async function scanBLE(classroom) {
         }
     }
 
-    // Step 2 — Read RSSI via watchAdvertisements BEFORE connecting to GATT
-    // This way we never hold a GATT connection and ESP32 stays free for next student
-    let rssi = null;
+    // Step 2 — Connect to GATT to get a real RSSI reading
+    let server;
+    try {
+        server = await device.gatt.connect();
+    } catch (err) {
+        throw new Error('Could not connect to classroom device. Please try again.');
+    }
+
+    // Step 3 — Read RSSI via watchAdvertisements while connected
+    let rssi = -65;
     try {
         rssi = await new Promise((resolve) => {
             const timeout = setTimeout(() => {
                 device.removeEventListener('advertisementreceived', handler);
-                if (device.watchingAdvertisements) {
-                    device.unwatchAdvertisements().catch(() => {});
-                }
-                resolve(null); // timed out — no reading
-            }, 5000);
+                resolve(-65);
+            }, 4000);
 
             const handler = (event) => {
                 clearTimeout(timeout);
                 device.removeEventListener('advertisementreceived', handler);
-                if (device.watchingAdvertisements) {
-                    device.unwatchAdvertisements().catch(() => {});
-                }
-                resolve(event.rssi ?? null);
+                resolve(event.rssi ?? -65);
             };
 
             device.addEventListener('advertisementreceived', handler);
             device.watchAdvertisements().catch(() => {
-                // watchAdvertisements not supported on this browser
                 clearTimeout(timeout);
-                resolve(null);
+                resolve(-65);
             });
         });
     } catch (e) {
-        rssi = null;
+        rssi = -65;
     }
 
-    // If watchAdvertisements not supported or timed out — fall back to
-    // requestDevice success as proximity proof (fixed passing value)
-    if (rssi === null) {
-        console.log(`[BLE] RSSI unavailable — using requestDevice as proximity proof`);
-        return -65;
+    // Step 4 — Force disconnect via device.gatt directly
+    try {
+        device.gatt.disconnect();
+    } catch (e) {
+        console.warn('Disconnect error (ignored):', e);
     }
 
     console.log(`[BLE] RSSI for ${classroom}: ${rssi} dBm`);
