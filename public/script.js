@@ -334,17 +334,14 @@ async function fetchSessionToken() {
 }
 
 // ─── BLE RSSI SCAN ───────────────────────────────────────────────────
-// Scans for the ESP32 beacon whose name matches the classroom ID.
-// Returns the RSSI value if found, or throws if unavailable/too weak.
+// Scans for the ESP32 beacon, connects, reads real RSSI, then disconnects cleanly.
 async function scanBLE(classroom) {
     if (!navigator.bluetooth)
         throw new Error('Web Bluetooth is not supported on this browser. Use Chrome on Android.');
 
-    // Ask user to select the ESP32 beacon by name
-    // The ESP32 advertises its device name as the classroom ID (e.g. "AB3")
+    // Step 1 — Show popup filtered to classroom beacon name
     let device;
     try {
-        // Try exact name filter first
         device = await navigator.bluetooth.requestDevice({
             filters: [
                 { name: classroom },
@@ -354,19 +351,15 @@ async function scanBLE(classroom) {
         });
     } catch (err) {
         if (err.name === 'NotFoundError') {
-            // Popup appeared but user cancelled or device not listed —
-            // try again with acceptAllDevices so user can see all nearby devices
             try {
                 device = await navigator.bluetooth.requestDevice({
                     acceptAllDevices: true,
                     optionalServices: ['generic_access']
                 });
-                // Verify the selected device is actually the right classroom beacon
-                if (device.name !== classroom) {
+                if (device.name !== classroom)
                     throw new Error(`Wrong device selected. Please select "${classroom}" from the list.`);
-                }
             } catch (err2) {
-                throw new Error(`ESP32 beacon "${classroom}" not found. Make sure the classroom device is on and you are nearby.`);
+                throw new Error(`ESP32 beacon "${classroom}" not found. Make sure the classroom device is on.`);
             }
         } else if (err.name === 'NotAllowedError') {
             throw new Error('Bluetooth permission denied. Please allow Bluetooth and try again.');
@@ -375,11 +368,55 @@ async function scanBLE(classroom) {
         }
     }
 
-    // DO NOT connect to GATT — connecting blocks other students from scanning.
-    // requestDevice() succeeding is itself the proximity proof:
-    // the phone can only see AB3 in the popup if it is physically nearby.
-    // Send a fixed passing RSSI value — server just checks it is present.
-    return -65;
+    // Step 2 — Connect to GATT
+    let server;
+    try {
+        server = await device.gatt.connect();
+    } catch (err) {
+        throw new Error('Could not connect to classroom device. Please try again.');
+    }
+
+    // Step 3 — Read RSSI via watchAdvertisements (one reading then stop)
+    let rssi = -65; // default passing value if RSSI API unavailable
+    try {
+        rssi = await new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                // No advertisement received in 3s — treat as present, use default
+                device.removeEventListener('advertisementreceived', handler);
+                resolve(-65);
+            }, 3000);
+
+            const handler = (event) => {
+                clearTimeout(timeout);
+                device.removeEventListener('advertisementreceived', handler);
+                // Stop watching immediately after first reading
+                if (device.watchingAdvertisements) {
+                    device.unwatchAdvertisements().catch(() => {});
+                }
+                resolve(event.rssi ?? -65);
+            };
+
+            device.addEventListener('advertisementreceived', handler);
+            device.watchAdvertisements().catch(() => {
+                // watchAdvertisements not supported — clear timeout and use default
+                clearTimeout(timeout);
+                resolve(-65);
+            });
+        });
+    } catch (e) {
+        rssi = -65;
+    }
+
+    // Step 4 — Disconnect cleanly so ESP32 restarts advertising for next student
+    try {
+        device.unwatchAdvertisements().catch(() => {});
+        if (server && server.connected) server.disconnect();
+    } catch (e) {
+        console.warn('Disconnect error (ignored):', e);
+    }
+
+    console.log(`[BLE] RSSI for ${classroom}: ${rssi} dBm`);
+    return rssi;
 }
 
 
