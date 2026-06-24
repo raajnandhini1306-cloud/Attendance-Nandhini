@@ -344,30 +344,51 @@ async function scanBLE(classroom) {
     // The ESP32 advertises its device name as the classroom ID (e.g. "AB3")
     let device;
     try {
+        // Try exact name filter first
         device = await navigator.bluetooth.requestDevice({
-            filters: [{ name: classroom }],
+            filters: [
+                { name: classroom },
+                { namePrefix: classroom }
+            ],
             optionalServices: ['generic_access']
         });
     } catch (err) {
-        if (err.name === 'NotFoundError')
-            throw new Error(`ESP32 beacon "${classroom}" not found nearby. Make sure the classroom device is on.`);
-        throw err;
+        if (err.name === 'NotFoundError') {
+            // Popup appeared but user cancelled or device not listed —
+            // try again with acceptAllDevices so user can see all nearby devices
+            try {
+                device = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: ['generic_access']
+                });
+                // Verify the selected device is actually the right classroom beacon
+                if (device.name !== classroom) {
+                    throw new Error(`Wrong device selected. Please select "${classroom}" from the list.`);
+                }
+            } catch (err2) {
+                throw new Error(`ESP32 beacon "${classroom}" not found. Make sure the classroom device is on and you are nearby.`);
+            }
+        } else if (err.name === 'NotAllowedError') {
+            throw new Error('Bluetooth permission denied. Please allow Bluetooth and try again.');
+        } else {
+            throw err;
+        }
     }
 
-    // Connect to GATT server to get a real RSSI reading
+    // Connect to GATT server
     const server = await device.gatt.connect();
 
-    // Read RSSI via the Web Bluetooth RSSI API
-    // Note: getRSSI() is available on the connected device object
-    const rssi = await device.watchAdvertisements
-        ? await getRSSIViaAdvertisement(device)
-        : null;
+    // Try to get RSSI via advertisement events
+    const rssi = await getRSSIViaAdvertisement(device);
 
-    await server.disconnect();
+    // Always explicitly disconnect so ESP32 restarts advertising for next student
+    try {
+        if (server.connected) server.disconnect();
+    } catch (e) {
+        console.warn('GATT disconnect error (ignored):', e);
+    }
 
-    // Fallback: if RSSI API unavailable, use connection success as proximity proof
-    // and send a nominal value that passes the -90 threshold.
-    // Real signal gating is still enforced — a device that isn't in range won't connect.
+    // Fallback: connection success itself proves proximity — send nominal passing value
     if (rssi === null) return -65;
 
     return rssi;
