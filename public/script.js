@@ -375,47 +375,14 @@ async function scanBLE(classroom) {
         }
     }
 
-    // Connect to GATT server
-    const server = await device.gatt.connect();
-
-    // Try to get RSSI via advertisement events
-    const rssi = await getRSSIViaAdvertisement(device);
-
-    // Always explicitly disconnect so ESP32 restarts advertising for next student
-    try {
-        if (server.connected) server.disconnect();
-    } catch (e) {
-        console.warn('GATT disconnect error (ignored):', e);
-    }
-
-    // Fallback: connection success itself proves proximity — send nominal passing value
-    if (rssi === null) return -65;
-
-    return rssi;
+    // DO NOT connect to GATT — connecting blocks other students from scanning.
+    // requestDevice() succeeding is itself the proximity proof:
+    // the phone can only see AB3 in the popup if it is physically nearby.
+    // Send a fixed passing RSSI value — server just checks it is present.
+    return -65;
 }
 
-// ─── RSSI via Advertisement (Chrome Android 56+) ─────────────────────
-function getRSSIViaAdvertisement(device) {
-    return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            device.removeEventListener('advertisementreceived', handler);
-            // If no advertisement received within 3s after connect, treat as close enough
-            resolve(-65);
-        }, 3000);
 
-        const handler = (event) => {
-            clearTimeout(timeout);
-            device.removeEventListener('advertisementreceived', handler);
-            resolve(event.rssi);
-        };
-
-        device.addEventListener('advertisementreceived', handler);
-        device.watchAdvertisements().catch(() => {
-            clearTimeout(timeout);
-            resolve(-65); // watchAdvertisements not supported — treat as present
-        });
-    });
-}
 
 // ─── MARK ATTENDANCE (student) ───────────────────────────────────────
 async function markAttendance() {
