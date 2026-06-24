@@ -35,15 +35,10 @@ function getDistanceMeters(lat1, lon1, lat2, lon2) {
 }
 
 // ─── helper: normalize any credential ID to base64url string ─────────
-// simplewebauthn v10 returns credentialID as a base64url string already.
-// If it's a Uint8Array/Buffer (older versions), convert it.
-// Either way, output is a clean base64url string with no padding.
 function toBase64url(value) {
     if (typeof value === 'string') {
-        // already a string — normalize to base64url (strip padding, fix chars)
         return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
     }
-    // Uint8Array or Buffer
     return Buffer.from(value).toString('base64url');
 }
 
@@ -200,7 +195,7 @@ router.post('/api/start-attendance', (req, res) => {
     );
 });
 
-// ─── ACTIVE SESSION (ESP32 polls this) ────────────────────────────────
+// ─── ACTIVE SESSION (student polls this) ─────────────────────────────
 router.get('/api/active-session', (req, res) => {
     const classroom = req.query.classroom;
     if (!classroom)
@@ -223,7 +218,7 @@ router.get('/api/active-session', (req, res) => {
 
 // ─── MARK ATTENDANCE ──────────────────────────────────────────────────
 router.post('/api/mark-attendance', (req, res) => {
-    const { reg_number, latitude, longitude, classroom, boardCode, sessionToken, fingerprint } = req.body;
+    const { reg_number, latitude, longitude, classroom, boardCode, sessionToken, fingerprint, rssi } = req.body;
 
     if (!reg_number || !latitude || !longitude || !classroom || !boardCode || !sessionToken || !fingerprint)
         return res.status(400).json({ success: false, message: 'Missing fields' });
@@ -231,7 +226,7 @@ router.post('/api/mark-attendance', (req, res) => {
     const now = Date.now();
     const { date, time } = getNow();
 
-    // Step 0 — Validate device fingerprint
+    // Step 0 — Validate device fingerprint (L2)
     db.get(
         `SELECT * FROM device_fingerprints WHERE reg_number = ?`,
         [reg_number],
@@ -241,7 +236,7 @@ router.post('/api/mark-attendance', (req, res) => {
             if (fpRow.fingerprint !== fingerprint)
                 return res.status(400).json({ success: false, message: 'Wrong device. Please use your registered device.' });
 
-            // Step 1 — Validate session
+            // Step 1 — Validate session (L3)
             db.get(
                 `SELECT * FROM sessions
                  WHERE token = ? AND classroom = ? AND is_active = 1 AND expiry_time > ?`,
@@ -251,11 +246,25 @@ router.post('/api/mark-attendance', (req, res) => {
                     if (!session)
                         return res.status(400).json({ success: false, message: 'No active session — time may have expired' });
 
-                    // Step 2 — Validate board code
+                    // Step 1.5 — BLE RSSI proximity check (L5)
+                    // rssi is sent by the student's phone after connecting to the ESP32 beacon.
+                    // The ESP32 advertises its name as the classroom ID (e.g. "AB3").
+                    // Threshold: -90 dBm — anything weaker means the student is too far away.
+                    if (rssi === undefined || rssi === null)
+                        return res.status(400).json({ success: false, message: 'BLE proximity check missing — make sure Bluetooth is enabled.' });
+
+                    const rssiValue = Number(rssi);
+                    if (isNaN(rssiValue) || rssiValue < -90)
+                        return res.status(400).json({
+                            success: false,
+                            message: `BLE signal too weak (${rssiValue} dBm). You must be inside the classroom.`
+                        });
+
+                    // Step 2 — Validate board code (L6)
                     if (session.board_code !== boardCode)
                         return res.status(400).json({ success: false, message: 'Wrong board code' });
 
-                    // Step 3 — Get classroom location
+                    // Step 3 — Get classroom location and GPS distance check (L4)
                     db.get(
                         `SELECT * FROM classrooms WHERE classroom_id = ?`,
                         [classroom],
@@ -264,7 +273,6 @@ router.post('/api/mark-attendance', (req, res) => {
                             if (!classroomRow)
                                 return res.status(400).json({ success: false, message: 'Classroom location not found' });
 
-                            // Step 4 — GPS distance check
                             const distance = getDistanceMeters(
                                 latitude, longitude,
                                 classroomRow.center_lat, classroomRow.center_lng
@@ -276,7 +284,7 @@ router.post('/api/mark-attendance', (req, res) => {
                                     message: `You are ${Math.round(distance)}m away. Must be within ${classroomRow.radius}m.`
                                 });
 
-                            // Step 5 — Duplicate check
+                            // Step 4 — Insert attendance, block duplicate (L8)
                             db.run(
                                 `INSERT INTO attendance (reg_number, session_id, date, time, status)
                                  VALUES (?, ?, ?, ?, 'Present')`,
@@ -453,8 +461,6 @@ router.post('/api/webauthn/register-verify', async (req, res) => {
             const credentialPublicKey = info.credentialPublicKey || info.credential?.publicKey;
             const counter = info.counter ?? info.credential?.counter ?? 0;
 
-            // ✅ FIX: use toBase64url() so we never double-encode a string
-            // and never lose data from a Uint8Array
             const credIdStored = toBase64url(credentialID);
             const pubKeyStored = typeof credentialPublicKey === 'string'
                 ? credentialPublicKey
@@ -491,7 +497,6 @@ router.post('/api/webauthn/auth-options', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fingerprint registered' });
 
         try {
-            // credential_id is already stored as base64url — use directly
             const credIdBase64url = toBase64url(row.credential_id);
 
             const options = await generateAuthenticationOptions({
@@ -534,10 +539,7 @@ router.post('/api/webauthn/auth-verify', async (req, res) => {
             return res.status(400).json({ success: false, message: 'No credential found' });
 
         try {
-            // credential_id stored as base64url → decode to Uint8Array for verification
             const credIdBytes = new Uint8Array(Buffer.from(row.credential_id, 'base64url'));
-
-            // public_key stored as standard base64 → decode to Uint8Array
             const pubKeyBytes = new Uint8Array(Buffer.from(row.public_key, 'base64'));
 
             const verification = await verifyAuthenticationResponse({

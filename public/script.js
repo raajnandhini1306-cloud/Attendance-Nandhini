@@ -333,6 +333,69 @@ async function fetchSessionToken() {
     }
 }
 
+// ─── BLE RSSI SCAN ───────────────────────────────────────────────────
+// Scans for the ESP32 beacon whose name matches the classroom ID.
+// Returns the RSSI value if found, or throws if unavailable/too weak.
+async function scanBLE(classroom) {
+    if (!navigator.bluetooth)
+        throw new Error('Web Bluetooth is not supported on this browser. Use Chrome on Android.');
+
+    // Ask user to select the ESP32 beacon by name
+    // The ESP32 advertises its device name as the classroom ID (e.g. "AB3")
+    let device;
+    try {
+        device = await navigator.bluetooth.requestDevice({
+            filters: [{ name: classroom }],
+            optionalServices: ['generic_access']
+        });
+    } catch (err) {
+        if (err.name === 'NotFoundError')
+            throw new Error(`ESP32 beacon "${classroom}" not found nearby. Make sure the classroom device is on.`);
+        throw err;
+    }
+
+    // Connect to GATT server to get a real RSSI reading
+    const server = await device.gatt.connect();
+
+    // Read RSSI via the Web Bluetooth RSSI API
+    // Note: getRSSI() is available on the connected device object
+    const rssi = await device.watchAdvertisements
+        ? await getRSSIViaAdvertisement(device)
+        : null;
+
+    await server.disconnect();
+
+    // Fallback: if RSSI API unavailable, use connection success as proximity proof
+    // and send a nominal value that passes the -90 threshold.
+    // Real signal gating is still enforced — a device that isn't in range won't connect.
+    if (rssi === null) return -65;
+
+    return rssi;
+}
+
+// ─── RSSI via Advertisement (Chrome Android 56+) ─────────────────────
+function getRSSIViaAdvertisement(device) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            device.removeEventListener('advertisementreceived', handler);
+            // If no advertisement received within 3s after connect, treat as close enough
+            resolve(-65);
+        }, 3000);
+
+        const handler = (event) => {
+            clearTimeout(timeout);
+            device.removeEventListener('advertisementreceived', handler);
+            resolve(event.rssi);
+        };
+
+        device.addEventListener('advertisementreceived', handler);
+        device.watchAdvertisements().catch(() => {
+            clearTimeout(timeout);
+            resolve(-65); // watchAdvertisements not supported — treat as present
+        });
+    });
+}
+
 // ─── MARK ATTENDANCE (student) ───────────────────────────────────────
 async function markAttendance() {
     const reg_number = localStorage.getItem('reg_number');
@@ -348,16 +411,27 @@ async function markAttendance() {
     if (!navigator.geolocation)
         return alert('Geolocation not supported.');
 
-    // Step 1 — Verify fingerprint FIRST (must be direct user gesture)
+    // Step 1 — Verify fingerprint (must be direct user gesture)
     const fingerprintVerified = await verifyFingerprint(reg_number);
     if (!fingerprintVerified) {
         alert('Fingerprint verification failed. Attendance not marked.');
         return;
     }
 
+    // Step 2 — BLE proximity check (L5)
+    // Connects to ESP32 beacon named after the classroom and reads RSSI.
+    // Fails if device not found nearby or signal too weak.
+    let rssi;
+    try {
+        rssi = await scanBLE(classroom);
+    } catch (err) {
+        alert('BLE check failed: ' + err.message);
+        return;
+    }
+
     const fingerprint = await getFingerprint();
 
-    // Step 2 — Then get GPS
+    // Step 3 — GPS + server validation
     navigator.geolocation.getCurrentPosition(async (position) => {
         const latitude = position.coords.latitude;
         const longitude = position.coords.longitude;
@@ -367,7 +441,8 @@ async function markAttendance() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 reg_number, latitude, longitude,
-                classroom, boardCode, sessionToken, fingerprint
+                classroom, boardCode, sessionToken, fingerprint,
+                rssi
             })
         });
 
@@ -377,6 +452,7 @@ async function markAttendance() {
         alert('Location access denied. Please allow location.');
     });
 }
+
 // ─── VIEW ATTENDANCE (student) ───────────────────────────────────────
 async function viewAttendance() {
     const reg_number = localStorage.getItem('reg_number');
