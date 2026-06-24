@@ -264,25 +264,35 @@ router.post('/api/mark-attendance', (req, res) => {
                     if (session.board_code !== boardCode)
                         return res.status(400).json({ success: false, message: 'Wrong board code' });
 
-                    // Step 3 — Get classroom location and GPS distance check (L4)
+                    // Step 3 — GPS distance check (L4)
+                    // BLE already verified physical proximity so GPS is not a hard block.
+                    // If student is within geofence — great. If not — BLE overrides.
+                    // Distance is always logged for faculty proxy review.
                     db.get(
                         `SELECT * FROM classrooms WHERE classroom_id = ?`,
                         [classroom],
                         (err, classroomRow) => {
                             if (err) return res.status(500).json({ success: false, message: 'Database error' });
-                            if (!classroomRow)
-                                return res.status(400).json({ success: false, message: 'Classroom location not found' });
 
-                            const distance = getDistanceMeters(
-                                latitude, longitude,
-                                classroomRow.center_lat, classroomRow.center_lng
+                            let distance = null;
+                            let gpsNote = 'GPS location not set for classroom.';
+
+                            if (classroomRow) {
+                                distance = getDistanceMeters(
+                                    latitude, longitude,
+                                    classroomRow.center_lat, classroomRow.center_lng
+                                );
+                                gpsNote = distance <= classroomRow.radius
+                                    ? `within geofence (${Math.round(distance)}m)`
+                                    : `outside geofence (${Math.round(distance)}m) — overridden by BLE`;
+                            }
+
+                            // Log location regardless
+                            db.run(
+                                `INSERT INTO location (reg_number, latitude, longitude, date, time)
+                                 VALUES (?, ?, ?, ?, ?)`,
+                                [reg_number, latitude, longitude, date, time]
                             );
-
-                            if (distance > classroomRow.radius)
-                                return res.status(400).json({
-                                    success: false,
-                                    message: `You are ${Math.round(distance)}m away. Must be within ${classroomRow.radius}m.`
-                                });
 
                             // Step 4 — Insert attendance, block duplicate (L8)
                             db.run(
@@ -296,15 +306,9 @@ router.post('/api/mark-attendance', (req, res) => {
                                         return res.status(500).json({ success: false, message: 'Database error' });
                                     }
 
-                                    db.run(
-                                        `INSERT INTO location (reg_number, latitude, longitude, date, time)
-                                         VALUES (?, ?, ?, ?, ?)`,
-                                        [reg_number, latitude, longitude, date, time]
-                                    );
-
                                     res.json({
                                         success: true,
-                                        message: `Attendance marked. You were ${Math.round(distance)}m from classroom.`,
+                                        message: `Attendance marked. BLE verified. GPS: ${gpsNote}.`,
                                         date,
                                         time
                                     });
