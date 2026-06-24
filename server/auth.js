@@ -254,7 +254,7 @@ router.post('/api/mark-attendance', (req, res) => {
                         return res.status(400).json({ success: false, message: 'BLE proximity check missing — make sure Bluetooth is enabled.' });
 
                     const rssiValue = Number(rssi);
-                    if (isNaN(rssiValue) || rssiValue < -75)
+                    if (isNaN(rssiValue) || rssiValue < -60)
                         return res.status(400).json({
                             success: false,
                             message: `BLE signal too weak (${rssiValue} dBm). You must be inside the classroom.`
