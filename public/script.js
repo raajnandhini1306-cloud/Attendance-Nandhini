@@ -409,6 +409,7 @@ async function scanBLE(classroom) {
     }
 
     console.log(`[BLE] RSSI for ${classroom}: ${rssi} dBm`);
+    alert(`[DEBUG] BLE RSSI: ${rssi} dBm`); // remove after testing
     return rssi;
 }
 
